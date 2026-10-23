@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="bg">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Отчет</title>
+<style>
+  :root {
+    --bg: #eef1f4; --surface: #ffffff; --ink: #18212b; --muted: #66717f; --line: #dde2e8;
+    --rev: #1e7a4f; --exp: #b4342d; --accent: #2457a6; --weekend: #f6f8fa; --hover: #eaf0f8;
+    --edited: #c27a00; --input: #fbfcfd; color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161b; --surface: #1a2028; --ink: #e5e9ee; --muted: #929cab; --line: #2b333e;
+      --rev: #5cc493; --exp: #f08a80; --accent: #86adf0; --weekend: #1e252e; --hover: #223047;
+      --edited: #f0b44c; --input: #161b22; color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  main { max-width: 1400px; margin: 0 auto; padding: 16px 16px 40px; }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* Период */
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 14px; }
+  .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
+  .seg button { border: 0; background: none; padding: 6px 12px; border-radius: 6px; color: var(--muted); }
+  .seg button[aria-pressed=true] { background: var(--accent); color: #fff; }
+  @media (prefers-color-scheme: dark) { .seg button[aria-pressed=true] { color: #0d1522; } }
+  .nav { display: inline-flex; align-items: center; gap: 4px; }
+  .nav .arrow { width: 32px; height: 32px; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; }
+  .period { font-size: 20px; font-weight: 600; min-width: 210px; text-align: center; }
+  .ghost { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 12px; }
+  .spacer { flex: 1; }
+  .datepick { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 5px 8px; }
+
+  /* Обобщение */
+  .summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line);
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 14px; }
+  .summary div { background: var(--surface); padding: 12px 16px; }
+  .summary span { display: block; color: var(--muted); font-size: 13px; }
+  .summary strong { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .summary .r strong { color: var(--rev); } .summary .e strong { color: var(--exp); }
+  @media (max-width: 600px) { .summary strong { font-size: 18px; } .period { min-width: 0; font-size: 17px; } }
+
+  /* Табове */
+  .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 0; }
+  .tabs button { border: 0; background: none; padding: 9px 16px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tabs button[aria-selected=true] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+  .tabs button.ghost { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 5px 12px; color: var(--ink); }
+  .tabs button.ghost:disabled { opacity: .6; }
+  .tabs .sync { margin-left: auto; align-self: center; font-size: 12px; color: var(--muted); padding-right: 4px; }
+
+  .notice { margin: 10px 0 0; padding: 10px 12px; border-left: 3px solid var(--exp); background: var(--surface); border-radius: 4px; }
+
+  /* Таблица */
+  .tablewrap { overflow: auto; max-height: calc(100vh - 250px); min-height: 200px; background: var(--surface);
+    border: 1px solid var(--line); border-top: 0; border-radius: 0 0 10px 10px; }
+  table { border-collapse: separate; border-spacing: 0; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { border-bottom: 1px solid var(--line); padding: 0; white-space: nowrap; }
+  thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); text-align: right; font-weight: 600;
+    font-size: 13px; color: var(--muted); padding: 9px 10px; border-bottom: 2px solid var(--line); }
+  thead th.colhead { cursor: pointer; }
+  thead th.colhead:hover { color: var(--ink); }
+  thead th:first-child, tbody th, tfoot th { position: sticky; left: 0; z-index: 1; background: inherit; text-align: left; }
+  thead th:first-child { z-index: 3; background: var(--surface); }
+  tbody tr { background: var(--surface); }
+  tbody tr.weekend { background: var(--weekend); }
+  tbody tr.today th { box-shadow: inset 3px 0 0 var(--accent); }
+  tbody tr.future { color: var(--muted); }
+  tbody th { font-weight: 400; padding: 0 10px; }
+  tbody th button { border: 0; background: none; padding: 7px 0; text-align: left; width: 100%; }
+  tbody th button:hover { color: var(--accent); text-decoration: underline; }
+  td { text-align: right; min-width: 96px; }
+  td.total, th.total { font-weight: 600; }
+  td .v { padding: 7px 10px; display: block; }
+  td input { width: 100%; min-width: 90px; border: 0; background: transparent; box-shadow: inset 0 -1px 0 var(--line); text-align: right; padding: 7px 10px; }
+  td input:hover { background: var(--input); box-shadow: inset 0 0 0 1px var(--line); }
+  td input:focus { background: var(--input); box-shadow: inset 0 0 0 2px var(--accent); outline: none; }
+  td button.cell { width: 100%; border: 0; background: transparent; text-align: right; padding: 7px 10px; }
+  td button.cell:hover { background: var(--hover); }
+  td.edited button.cell, td.edited input { color: var(--edited); }
+  td.edited button.cell::before { content: "✎ "; font-size: 11px; }
+  .pos { color: var(--rev); } .neg { color: var(--exp); }
+  tfoot td, tfoot th { position: sticky; bottom: 0; background: var(--surface); border-top: 2px solid var(--line);
+    font-weight: 600; padding: 9px 10px; }
+  th.add { width: 1%; }
+  th.add button { border: 1px dashed var(--line); background: none; border-radius: 6px; padding: 3px 8px; color: var(--muted); }
+  th.add button:hover { color: var(--accent); border-color: var(--accent); }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+
+  /* Диалози */
+  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); padding: 0;
+    width: min(560px, calc(100vw - 24px)); }
+  dialog::backdrop { background: rgb(0 0 0 / .35); }
+  .dlg { padding: 18px 20px; }
+  .dlg h2 { font-size: 17px; margin: 0 0 4px; }
+  .dlg .sub { color: var(--muted); margin: 0 0 14px; }
+  .dlg table { margin: 8px 0 12px; }
+  .dlg table td, .dlg table th { padding: 6px 8px; border-bottom: 1px solid var(--line); position: static; }
+  .dlg table th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px; }
+  .dlg table td:first-child { text-align: left; white-space: normal; }
+  .scroll { max-height: 320px; overflow: auto; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+  .row input[type=text], .row input:not([type]), .field { flex: 1; border: 1px solid var(--line); background: var(--input);
+    border-radius: 6px; padding: 7px 9px; min-width: 0; }
+  .row .amount { flex: 0 0 120px; text-align: right; }
+  .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
+  .primary { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 16px; }
+  @media (prefers-color-scheme: dark) { .primary { color: #0d1522; } }
+  .danger { color: var(--exp); border: 1px solid var(--line); background: none; border-radius: 8px; padding: 8px 14px; margin-right: auto; }
+  .x { border: 0; background: none; color: var(--muted); font-size: 18px; width: 30px; }
+  .x:hover { color: var(--exp); }
+  .err { color: var(--exp); }
+  .muted { color: var(--muted); }
+
+  /* Настройки */
+  .settings { background: var(--surface); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 10px 10px; padding: 8px 20px 24px; }
+  .settings h3 { font-size: 15px; margin: 22px 0 6px; }
+  .settings p.help { color: var(--muted); margin: 0 0 10px; max-width: 72ch; }
+  .form { display: grid; grid-template-columns: 200px minmax(0, 420px); gap: 8px 14px; align-items: center; }
+  .form label { color: var(--muted); }
+  @media (max-width: 600px) { .form { grid-template-columns: 1fr; } }
+  .maptable { width: auto; min-width: min(560px, 100%); }
+  .maptable td, .maptable th { padding: 6px 10px; text-align: left; position: static; }
+  .maptable select { border: 1px solid var(--line); background: var(--input); border-radius: 6px; padding: 5px 8px; }
+  .collist { display: flex; flex-wrap: wrap; gap: 6px; }
+  .collist button { border: 1px solid var(--line); background: var(--input); border-radius: 6px; padding: 5px 10px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="bar">
+    <div class="seg" id="modes" role="group" aria-label="Период">
+      <button data-mode="day">Ден</button><button data-mode="month">Месец</button>
+      <button data-mode="quarter">Тримесечие</button><button data-mode="year">Година</button>
+    </div>
+    <div class="nav">
+      <button class="arrow" id="prev" aria-label="Предишен период">‹</button>
+      <div class="period" id="periodLabel"></div>
+      <button class="arrow" id="next" aria-label="Следващ период">›</button>
+    </div>
+    <button class="ghost" id="todayBtn">Днес</button>
+    <input type="date" class="datepick" id="datePick" aria-label="Избор на дата">
+    <div class="seg" id="grouping" role="group" aria-label="Редове" hidden>
+      <button data-group="day">По дни</button><button data-group="month">По месеци</button>
+    </div>
+  </div>
+
+  <div class="summary">
+    <div class="r"><span>Приходи</span><strong id="sumRev">—</strong></div>
+    <div class="e"><span>Разходи</span><strong id="sumExp">—</strong></div>
+    <div><span>Резултат</span><strong id="sumRes">—</strong></div>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" data-tab="revenue">Приходи</button>
+    <button role="tab" data-tab="expense">Разходи</button>
+    <button role="tab" data-tab="turnover">Оборот</button>
+    <button role="tab" data-tab="settings">Настройки</button>
+    <span class="sync" id="syncInfo"></span>
+    <button class="ghost" id="refresh" style="align-self:center;margin-bottom:4px">Обнови от Microinvest</button>
+  </div>
+  <div id="view"></div>
+</main>
+
+<dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
+
+<script>
+// ------------------------------------------------------------ Помощни
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const money = new Intl.NumberFormat("bg-BG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const qfmt = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 3 });
+const m = (n) => money.format(n || 0);
+const mOrBlank = (n) => (n ? money.format(n) : "");
+const pad = (n) => String(n).padStart(2, "0");
+const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const parse = (s) => { const [y, mo, d] = s.split("-").map(Number); return new Date(y, mo - 1, d); };
+const MONTHS = ["януари", "февруари", "март", "април", "май", "юни", "юли", "август", "септември", "октомври", "ноември", "декември"];
+const WD = ["нд", "пн", "вт", "ср", "чт", "пт", "сб"];
+const cap = (s) => s[0].toUpperCase() + s.slice(1);
+const toNum = (v) => { const s = String(v ?? "").trim().replace(/\s/g, "").replace(",", "."); if (!s) return null; const n = Number(s); return Number.isFinite(n) ? n : NaN; };
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const j = await r.json().catch(() => ({ error: "Невалиден отговор от сървъра" }));
+  if (!r.ok) throw new Error(j.error || "Грешка");
+  return j;
+}
+
+// ------------------------------------------------------------ Състояние
+const S = {
+  mode: "month", anchor: fmt(new Date()), group: "month", tab: "revenue",
+  meta: null, days: [], syncError: null, loading: false, loadedAt: null,
+};
+const today = () => fmt(new Date());
+
+function period() {
+  const a = parse(S.anchor), y = a.getFullYear(), mo = a.getMonth();
+  if (S.mode === "day") return { from: S.anchor, to: S.anchor, label: `${WD[a.getDay()]}, ${a.getDate()} ${MONTHS[mo]} ${y}` };
+  if (S.mode === "month") return { from: fmt(new Date(y, mo, 1)), to: fmt(new Date(y, mo + 1, 0)), label: `${cap(MONTHS[mo])} ${y}` };
+  if (S.mode === "quarter") { const q = Math.floor(mo / 3); return { from: fmt(new Date(y, q * 3, 1)), to: fmt(new Date(y, q * 3 + 3, 0)), label: `${q + 1}-во тримесечие ${y}`.replace("2-во", "2-ро").replace("3-во", "3-то").replace("4-во", "4-то") }; }
+  return { from: `${y}-01-01`, to: `${y}-12-31`, label: `${y} г.` };
+}
+
+function shift(dir) {
+  const a = parse(S.anchor);
+  if (S.mode === "day") a.setDate(a.getDate() + dir);
+  else { a.setDate(1); a.setMonth(a.getMonth() + dir * (S.mode === "month" ? 1 : S.mode === "quarter" ? 3 : 12)); }
+  S.anchor = fmt(a);
+  load();
+}
+
+const byGroupRows = () => (S.mode === "quarter" || S.mode === "year") && S.group === "month";
+
+// ------------------------------------------------------------ Изчисления
+const revCols = () => S.meta.revenueColumns;
+const expCols = () => S.meta.expenseColumns;
+const expVal = (day, col) => { const v = day.expenses[col.id]; return Array.isArray(v) ? v.reduce((s, i) => s + (i.value || 0), 0) : (v || 0); };
+const revTotal = (day) => revCols().reduce((s, c) => s + (day.revenue[c.id] || 0), 0);
+const expTotal = (day) => expCols().reduce((s, c) => s + expVal(day, c), 0);
+
+// Редове: дни или месеци (сборно)
+function rows() {
+  if (!byGroupRows()) return S.days.map((d) => ({ key: d.date, day: d, days: [d] }));
+  const map = new Map();
+  for (const d of S.days) {
+    const k = d.date.slice(0, 7);
+    if (!map.has(k)) map.set(k, { key: k, days: [] });
+    map.get(k).days.push(d);
+  }
+  return [...map.values()];
+}
+const sum = (days, f) => days.reduce((s, d) => s + f(d), 0);
+
+// ------------------------------------------------------------ Зареждане
+async function init() {
+  try { S.meta = await api("/api/state"); }
+  catch (e) { $("#view").innerHTML = `<div class="notice">${esc(e.message)}</div>`; return; }
+  bindChrome();
+  load();
+}
+
+async function load(force) {
+  const p = period();
+  S.loading = true; updateChrome();
+  try {
+    const r = await api(`/api/report?from=${p.from}&to=${p.to}${force ? "&force=1" : ""}`);
+    S.days = r.days; S.syncError = r.syncError; S.meta.mappedColumns = r.mappedColumns; S.loadedAt = new Date();
+  } catch (e) { S.syncError = e.message; S.days = []; }
+  S.loading = false;
+  render();
+}
+
+function updateChrome() {
+  const p = period();
+  $("#periodLabel").textContent = p.label;
+  $("#datePick").value = S.anchor;
+  document.querySelectorAll("#modes button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.mode === S.mode));
+  $("#grouping").hidden = !(S.mode === "quarter" || S.mode === "year");
+  document.querySelectorAll("#grouping button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.group === S.group));
+  document.querySelectorAll(".tabs [role=tab]").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === S.tab));
+  $("#refresh").disabled = S.loading;
+  $("#syncInfo").textContent = S.loading ? "Зареждане…" : S.loadedAt ? `Обновено ${S.loadedAt.toLocaleTimeString("bg-BG", { hour: "2-digit", minute: "2-digit" })}${S.meta.mock ? " · демо данни" : ""}` : "";
+}
+
+function bindChrome() {
+  $("#modes").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.mode = b.dataset.mode; load(); };
+  $("#grouping").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.group = b.dataset.group; render(); };
+  $("#prev").onclick = () => shift(-1);
+  $("#next").onclick = () => shift(1);
+  $("#todayBtn").onclick = () => { S.anchor = today(); load(); };
+  $("#datePick").onchange = (e) => { if (e.target.value) { S.anchor = e.target.value; load(); } };
+  $("#refresh").onclick = () => load(true);
+  document.querySelector(".tabs").onclick = (e) => { const b = e.target.closest("[role=tab]"); if (!b) return; S.tab = b.dataset.tab; render(); };
+}
+
+// ------------------------------------------------------------ Рендиране
+function render() {
+  updateChrome();
+  const tr = sum(S.days, revTotal), te = sum(S.days, expTotal), res = tr - te;
+  $("#sumRev").textContent = m(tr);
+  $("#sumExp").textContent = m(te);
+  $("#sumRes").textContent = m(res);
+  $("#sumRes").className = res < 0 ? "neg" : "";
+
+  // запазване на фокуса между прерисуванията
+  const focusKey = document.activeElement?.dataset?.key;
+
+  const notice = S.syncError ? `<div class="notice">${esc(S.syncError)} Показват се запазените данни.</div>` : "";
+  let html = "";
+  if (S.tab === "revenue") html = revenueTable();
+  else if (S.tab === "expense") html = expenseTable();
+  else if (S.tab === "turnover") html = turnoverTable();
+  else html = settingsView();
+  $("#view").innerHTML = (S.tab !== "settings" ? notice : "") + html;
+
+  if (focusKey) { const el = document.querySelector(`[data-key="${CSS.escape(focusKey)}"]`); if (el) { el.focus(); el.select?.(); } }
+}
+
+function rowHead(r) {
+  if (r.day) {
+    const d = parse(r.key);
+    return `<th><button data-goday="${r.key}" title="Отвори деня">${WD[d.getDay()]} ${pad(d.getDate())}.${pad(d.getMonth() + 1)}</button></th>`;
+  }
+  const [y, mo] = r.key.split("-").map(Number);
+  return `<th><button data-gomonth="${r.key}" title="Отвори месеца">${cap(MONTHS[mo - 1])}</button></th>`;
+}
+function rowClass(r) {
+  if (!r.day) return "";
+  const d = parse(r.key), c = [];
+  if (d.getDay() === 0 || d.getDay() === 6) c.push("weekend");
+  if (r.key === today()) c.push("today");
+  if (r.key > today()) c.push("future");
+  return c.join(" ");
+}
+const colHead = (table, c) => `<th class="colhead" data-colmenu="${table}|${c.id}" tabindex="0" title="Преименуване, подреждане, изтриване">${esc(c.name)}</th>`;
+const addHead = (table) => `<th class="add"><button data-addcol="${table}">+ Колона</button></th>`;
+
+function revenueTable() {
+  const cols = revCols(), mapped = new Set(S.meta.mappedColumns), R = rows();
+  if (!R.length) return `<div class="tablewrap"><div class="empty">Няма данни за периода.</div></div>`;
+  const body = R.map((r) => {
+    const cells = cols.map((c) => {
+      if (!r.day) return `<td><span class="v">${mOrBlank(sum(r.days, (d) => d.revenue[c.id] || 0))}</span></td>`;
+      const d = r.day, v = d.revenue[c.id] || 0, edited = d.edited.includes(c.id), key = `rev|${d.date}|${c.id}`;
+      if (mapped.has(c.id)) {
+        const title = edited ? `Ръчна стойност. Microinvest: ${m(d.revenueApi[c.id])}` : "Покажи продажбите от Microinvest";
+        return `<td class="${edited ? "edited" : ""}"><button class="cell" data-key="${key}" data-revdetail="${d.date}|${c.id}" title="${title}">${mOrBlank(v) || (edited ? "0,00" : "&nbsp;")}</button></td>`;
+      }
+      return `<td><input data-key="${key}" data-rev="${d.date}|${c.id}" inputmode="decimal" value="${v ? m(v) : ""}" aria-label="${esc(c.name)} ${d.date}"></td>`;
+    }).join("");
+    return `<tr class="${rowClass(r)}">${rowHead(r)}<td class="total"><span class="v">${m(sum(r.days, revTotal))}</span></td>${cells}<td></td></tr>`;
+  }).join("");
+  const foot = cols.map((c) => `<td>${m(sum(S.days, (d) => d.revenue[c.id] || 0))}</td>`).join("");
+  return `<div class="tablewrap"><table>
+    <thead><tr><th>${byGroupRows() ? "Месец" : "Дата"}</th><th class="total">Обща стойност</th>${cols.map((c) => colHead("revenue", c)).join("")}${addHead("revenue")}</tr></thead>
+    <tbody>${body}</tbody>
+    <tfoot><tr><th>Общо</th><td>${m(sum(S.days, revTotal))}</td>${foot}<td></td></tr></tfoot></table></div>`;
+}
+
+function expenseTable() {
+  const cols = expCols(), R = rows();
+  if (!R.length) return `<div class="tablewrap"><div class="empty">Няма данни за периода.</div></div>`;
+  const body = R.map((r) => {
+    const cells = cols.map((c) => {
+      if (!r.day) return `<td><span class="v">${mOrBlank(sum(r.days, (d) => expVal(d, c)))}</span></td>`;
+      const d = r.day, key = `exp|${d.date}|${c.id}`;
+      if (c.kind === "list") {
+        const list = d.expenses[c.id] || [];
+        const title = list.length ? list.map((i) => `${i.name || "—"}: ${m(i.value)}`).join("\n") : "Добави разходи с име и стойност";
+        return `<td><button class="cell" data-key="${key}" data-explist="${d.date}|${c.id}" title="${esc(title)}">${list.length ? m(expVal(d, c)) + (list.length > 1 ? ` <span class="muted">(${list.length})</span>` : "") : "&nbsp;"}</button></td>`;
+      }
+      const v = d.expenses[c.id];
+      return `<td><input data-key="${key}" data-exp="${d.date}|${c.id}" inputmode="decimal" value="${v != null ? m(v) : ""}" aria-label="${esc(c.name)} ${d.date}"></td>`;
+    }).join("");
+    return `<tr class="${rowClass(r)}">${rowHead(r)}<td class="total"><span class="v">${m(sum(r.days, expTotal))}</span></td>${cells}<td></td></tr>`;
+  }).join("");
+  const foot = cols.map((c) => `<td>${m(sum(S.days, (d) => expVal(d, c)))}</td>`).join("");
+  return `<div class="tablewrap"><table>
+    <thead><tr><th>${byGroupRows() ? "Месец" : "Дата"}</th><th class="total">Общо</th>${cols.map((c) => colHead("expense", c)).join("")}${addHead("expense")}</tr></thead>
+    <tbody>${body}</tbody>
+    <tfoot><tr><th>Общо</th><td>${m(sum(S.days, expTotal))}</td>${foot}<td></td></tr></tfoot></table></div>`;
+}
+
+function turnoverTable() {
+  const R = rows();
+  if (!R.length) return `<div class="tablewrap"><div class="empty">Няма данни за периода.</div></div>`;
+  let running = 0;
+  const body = R.map((r) => {
+    const rv = sum(r.days, revTotal), ex = sum(r.days, expTotal), res = rv - ex;
+    running += res;
+    return `<tr class="${rowClass(r)}">${rowHead(r)}
+      <td><button class="cell" data-goto="revenue|${r.key}" title="Към Приходи">${m(rv)}</button></td>
+      <td><button class="cell" data-goto="expense|${r.key}" title="Към Разходи">${m(ex)}</button></td>
+      <td class="total ${res < 0 ? "neg" : ""}"><span class="v">${m(res)}</span></td>
+      <td class="${running < 0 ? "neg" : ""}"><span class="v">${m(running)}</span></td></tr>`;
+  }).join("");
+  const tr = sum(S.days, revTotal), te = sum(S.days, expTotal);
+  const margin = tr ? ((tr - te) / tr) * 100 : 0;
+  return `<div class="tablewrap"><table>
+    <thead><tr><th>${byGroupRows() ? "Месец" : "Дата"}</th><th>Приходи</th><th>Разходи</th><th class="total">Резултат</th><th>Натрупано</th></tr></thead>
+    <tbody>${body}</tbody>
+    <tfoot><tr><th>Общо</th><td class="pos">${m(tr)}</td><td class="neg">${m(te)}</td><td class="${tr - te < 0 ? "neg" : ""}">${m(tr - te)}</td>
+    <td class="muted">${tr ? `Марж ${qfmt.format(Math.round(margin * 10) / 10)}%` : ""}</td></tr></tfoot></table></div>`;
+}
+
+// ------------------------------------------------------------ Редакция в таблицата
+document.addEventListener("change", async (e) => {
+  const t = e.target;
+  if (!t.dataset.exp && !t.dataset.rev) return;
+  const [date, col] = (t.dataset.exp || t.dataset.rev).split("|");
+  const n = toNum(t.value);
+  if (Number.isNaN(n)) { t.setCustomValidity("Невалидно число"); t.reportValidity(); return; }
+  t.setCustomValidity("");
+  const day = S.days.find((d) => d.date === date);
+  try {
+    if (t.dataset.exp) {
+      await api("/api/expense", { date, col, value: n });
+      if (n === null) delete day.expenses[col]; else day.expenses[col] = n;
+    } else {
+      await api("/api/revenue", { date, col, value: n });
+      day.revenue[col] = n ?? day.revenueApi[col];
+      day.edited = day.edited.filter((x) => x !== col).concat(n === null ? [] : [col]);
+    }
+    render();
+  } catch (err) { alert(err.message); }
+});
+
+// Enter / стрелки — към клетката под/над
+document.addEventListener("keydown", (e) => {
+  const t = e.target;
+  if (!(t.dataset?.key) || !["Enter", "ArrowDown", "ArrowUp"].includes(e.key)) return;
+  if (t.tagName === "BUTTON" && e.key === "Enter") return;
+  const [tbl, date, col] = t.dataset.key.split("|");
+  const keys = [...document.querySelectorAll(`[data-key^="${tbl}|"][data-key$="|${col}"]`)];
+  const i = keys.indexOf(t), next = keys[i + (e.key === "ArrowUp" ? -1 : 1)];
+  if (next) { e.preventDefault(); next.focus(); next.select?.(); }
+});
+
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button, th.colhead");
+  if (!t) return;
+  const d = t.dataset;
+  if (d.goday) { S.mode = "day"; S.anchor = d.goday; load(); }
+  else if (d.gomonth) { S.mode = "month"; S.anchor = d.gomonth + "-01"; load(); }
+  else if (d.goto) {
+    const [tab, key] = d.goto.split("|");
+    S.tab = tab;
+    if (key.length === 7) { S.mode = "month"; S.anchor = key + "-01"; load(); } else render();
+  }
+  else if (d.revdetail) openRevenue(...d.revdetail.split("|"));
+  else if (d.explist) openList(...d.explist.split("|"));
+  else if (d.addcol) openAddColumn(d.addcol);
+  else if (d.colmenu) openColumn(...d.colmenu.split("|"));
+});
+document.addEventListener("keydown", (e) => {
+  if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("th.colhead")) { e.preventDefault(); openColumn(...e.target.dataset.colmenu.split("|")); }
+});
+
+// ------------------------------------------------------------ Диалози
+const dlg = $("#dlg");
+function showDialog(html, onBind) { $("#dlgBody").innerHTML = html; onBind?.($("#dlgBody")); if (!dlg.open) dlg.showModal(); }
+function closeDialog() { dlg.close(); }
+dlg.addEventListener("click", (e) => { if (e.target === dlg) closeDialog(); });
+const dateLabel = (s) => { const d = parse(s); return `${WD[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`; };
+
+async function openRevenue(date, colId) {
+  const col = revCols().find((c) => c.id === colId), day = S.days.find((d) => d.date === date);
+  const edited = day.edited.includes(colId);
+  const head = `<h2>${esc(col.name)}</h2><p class="sub">${dateLabel(date)}</p>`;
+  const form = (detailHtml) => `${head}${detailHtml}
+    <div class="row"><label for="ov" style="flex:0 0 auto">Ръчна стойност</label>
+      <input id="ov" class="field amount" inputmode="decimal" value="${edited ? m(day.revenue[colId]) : ""}" placeholder="${m(day.revenueApi[colId])}"></div>
+    <p class="muted" style="margin:4px 0 0">Оставете празно, за да се ползва сумата от Microinvest.</p>
+    <div class="actions">${edited ? `<button class="danger" id="clr">Премахни корекцията</button>` : ""}
+      <button class="ghost" id="cancel">Затвори</button><button class="primary" id="save">Запази</button></div>`;
+  const bind = (root) => {
+    $("#cancel", root).onclick = closeDialog;
+    const save = async (value) => {
+      try {
+        await api("/api/revenue", { date, col: colId, value });
+        day.revenue[colId] = value ?? day.revenueApi[colId];
+        day.edited = day.edited.filter((x) => x !== colId).concat(value === null ? [] : [colId]);
+        closeDialog(); render();
+      } catch (err) { alert(err.message); }
+    };
+    $("#save", root).onclick = () => { const n = toNum($("#ov", root).value); if (Number.isNaN(n)) return alert("Невалидно число"); save(n); };
+    $("#ov", root).onkeydown = (e) => { if (e.key === "Enter") $("#save", root).click(); };
+    if ($("#clr", root)) $("#clr", root).onclick = () => save(null);
+  };
+  showDialog(form(`<p class="muted">Зареждане на продажбите…</p>`), bind);
+  try {
+    const { lines } = await api(`/api/detail?date=${date}&col=${encodeURIComponent(colId)}`);
+    const total = lines.reduce((s, l) => s + l.amount, 0);
+    const tbl = lines.length
+      ? `<div class="scroll"><table><thead><tr><th>Артикул</th><th style="text-align:right">К-во</th><th style="text-align:right">Сума</th><th style="text-align:right">Док. №</th></tr></thead><tbody>
+          ${lines.map((l) => `<tr><td>${esc(l.name)}</td><td>${qfmt.format(l.qtty)}</td><td>${m(l.amount)}</td><td class="muted">${l.docs.slice(0, 3).join(", ")}${l.docs.length > 3 ? "…" : ""}</td></tr>`).join("")}
+        </tbody><tfoot><tr><td><strong>От Microinvest</strong></td><td></td><td><strong>${m(total)}</strong></td><td></td></tr></tfoot></table></div>`
+      : `<p class="muted">Няма продажби в Microinvest за тази колона на тази дата.</p>`;
+    if (dlg.open) showDialog(form(tbl), bind);
+  } catch (err) {
+    if (dlg.open) showDialog(form(`<p class="err">${esc(err.message)}</p>`), bind);
+  }
+}
+
+function openList(date, colId) {
+  const col = expCols().find((c) => c.id === colId), day = S.days.find((d) => d.date === date);
+  let items = (day.expenses[colId] || []).map((i) => ({ ...i }));
+  if (!items.length) items.push({ name: "", value: null });
+  const draw = () => showDialog(`<h2>${esc(col.name)}</h2><p class="sub">${dateLabel(date)}</p>
+    <div id="lines">${items.map((it, i) => `<div class="row">
+      <input class="field" data-i="${i}" data-f="name" placeholder="Описание" value="${esc(it.name)}">
+      <input class="field amount" data-i="${i}" data-f="value" inputmode="decimal" placeholder="0,00" value="${it.value != null ? m(it.value) : ""}">
+      <button class="x" data-del="${i}" aria-label="Премахни реда">×</button></div>`).join("")}</div>
+    <button class="ghost" id="addLine">+ Ред</button>
+    <div class="actions"><button class="ghost" id="cancel">Затвори</button><button class="primary" id="save">Запази</button></div>`, (root) => {
+      root.querySelectorAll("[data-f]").forEach((inp) => inp.oninput = () => { const it = items[inp.dataset.i]; if (inp.dataset.f === "name") it.name = inp.value; else it.value = toNum(inp.value); });
+      root.querySelectorAll("[data-del]").forEach((b) => b.onclick = () => { items.splice(+b.dataset.del, 1); if (!items.length) items.push({ name: "", value: null }); draw(); });
+      $("#addLine", root).onclick = () => { items.push({ name: "", value: null }); draw(); root.querySelector(`[data-i="${items.length - 1}"][data-f=name]`)?.focus(); };
+      $("#cancel", root).onclick = closeDialog;
+      $("#save", root).onclick = async () => {
+        if (items.some((i) => Number.isNaN(i.value))) return alert("Има невалидна сума");
+        try {
+          const r = await api("/api/expense", { date, col: colId, items });
+          if (r.value) day.expenses[colId] = r.value; else delete day.expenses[colId];
+          closeDialog(); render();
+        } catch (err) { alert(err.message); }
+      };
+    });
+  draw();
+  setTimeout(() => $("#dlgBody [data-f=name]")?.focus(), 0);
+}
+
+function openAddColumn(table) {
+  showDialog(`<h2>Нова колона в ${table === "revenue" ? "Приходи" : "Разходи"}</h2>
+    <div class="row"><input class="field" id="cname" placeholder="Име на колоната"></div>
+    ${table === "expense" ? `<label class="row"><input type="checkbox" id="ckind"> Няколко записа с име и стойност на ден (като „Разни“)</label>` : ""}
+    ${table === "revenue" ? `<p class="muted">Стойностите се въвеждат ръчно. За да идват от Microinvest, свържете групи артикули с колоната в Настройки.</p>` : ""}
+    <div class="actions"><button class="ghost" id="cancel">Отказ</button><button class="primary" id="ok">Добави</button></div>`, (root) => {
+    $("#cancel", root).onclick = closeDialog;
+    const ok = async () => {
+      try {
+        await api("/api/columns", { table, action: "add", name: $("#cname", root).value, kind: $("#ckind", root)?.checked ? "list" : undefined });
+        closeDialog(); await refreshMeta(); load();
+      } catch (err) { alert(err.message); }
+    };
+    $("#ok", root).onclick = ok;
+    $("#cname", root).onkeydown = (e) => { if (e.key === "Enter") ok(); };
+  });
+  setTimeout(() => $("#cname")?.focus(), 0);
+}
+
+function openColumn(table, id) {
+  const list = table === "revenue" ? revCols() : expCols(), col = list.find((c) => c.id === id);
+  showDialog(`<h2>Колона „${esc(col.name)}“</h2>
+    <div class="row"><input class="field" id="cname" value="${esc(col.name)}"></div>
+    <div class="row"><button class="ghost" id="left">← Наляво</button><button class="ghost" id="right">Надясно →</button></div>
+    <div class="actions"><button class="danger" id="del">Изтрий колоната</button><button class="ghost" id="cancel">Отказ</button><button class="primary" id="ok">Запази</button></div>`, (root) => {
+    const act = async (body) => { try { await api("/api/columns", { table, id, ...body }); await refreshMeta(); load(); return true; } catch (err) { alert(err.message); } };
+    $("#cancel", root).onclick = closeDialog;
+    $("#ok", root).onclick = async () => { if (await act({ action: "rename", name: $("#cname", root).value })) closeDialog(); };
+    $("#left", root).onclick = () => act({ action: "move", dir: -1 });
+    $("#right", root).onclick = () => act({ action: "move", dir: 1 });
+    $("#del", root).onclick = async () => {
+      if (!confirm(`Да изтрия ли колоната „${col.name}“? Въведените в нея стойности няма да се показват.`)) return;
+      if (await act({ action: "delete" })) closeDialog();
+    };
+  });
+}
+
+async function refreshMeta() { S.meta = await api("/api/state"); }
+
+// ------------------------------------------------------------ Настройки
+function settingsView() {
+  const s = S.meta.settings, cols = revCols();
+  const opts = (sel, withInherit) => (withInherit ? `<option value="">— автоматично —</option>` : "") +
+    cols.map((c) => `<option value="${c.id}" ${sel === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("");
+  const groups = S.meta.groups || [];
+  const level = (g) => Math.max(0, Math.floor(String(g.code || "").length / 3) - 1);
+  return `<div class="settings">
+    <h3>Връзка с Microinvest Склад Про</h3>
+    <p class="help">В Microinvest Utility Center трябва да е включен модулът Microinvest API, а порт 8700 да е отворен в защитната стена.</p>
+    <div class="form">
+      <label for="sUrl">Адрес на API</label><input class="field" id="sUrl" value="${esc(s.apiBase)}">
+      <label for="sKey">API ключ</label><input class="field" id="sKey" type="password" placeholder="${s.hasApiKey ? "запазен — въведете нов, за да го смените" : "без ключ"}">
+      <label for="sObj">Обект (ID)</label><input class="field" id="sObj" value="${s.objectId ?? ""}" placeholder="празно = всички обекти">
+      <label for="sTypes">Типове операции</label><input class="field" id="sTypes" value="${s.operationTypes.join(", ")}" title="2 = Продажба">
+      <label for="sVat">Суми</label><label><input type="checkbox" id="sVat" ${s.withVat ? "checked" : ""}> с ДДС</label>
+    </div>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="saveConn">Запази и провери връзката</button><span id="connMsg" class="muted"></span></div>
+
+    <h3>Групи артикули → колони в Приходи</h3>
+    <p class="help">Всяка продажба отива в колоната на групата на артикула. Подгрупите наследяват колоната на родителската група. Продажбите от групи без избрана колона отиват в:
+      <select id="sDefault" class="field" style="flex:none;padding:4px 8px">${opts(s.defaultRevenueColumn)}</select></p>
+    ${S.meta.catalogError ? `<p class="err">${esc(S.meta.catalogError)}</p>` : ""}
+    ${groups.length ? `<table class="maptable"><thead><tr><th>Група в Microinvest</th><th>Колона</th></tr></thead><tbody>
+      ${groups.map((g) => `<tr><td style="padding-left:${10 + level(g) * 20}px">${esc(g.name)} <span class="muted">${esc(g.code)}</span></td>
+        <td><select data-group="${g.id}">${opts(S.meta.groupMap[g.id] || "", true)}</select></td></tr>`).join("")}
+    </tbody></table>` : `<p class="muted">Групите ще се покажат след успешна връзка с Microinvest.</p>`}
+
+    <h3>Колони</h3>
+    <p class="help">Натиснете колона, за да я преименувате, преместите или изтриете.</p>
+    <div class="row"><span class="muted" style="width:80px">Приходи</span><div class="collist">${revCols().map((c) => `<button data-colmenu="revenue|${c.id}">${esc(c.name)}</button>`).join("")}<button data-addcol="revenue">+ Колона</button></div></div>
+    <div class="row"><span class="muted" style="width:80px">Разходи</span><div class="collist">${expCols().map((c) => `<button data-colmenu="expense|${c.id}">${esc(c.name)}</button>`).join("")}<button data-addcol="expense">+ Колона</button></div></div>
+
+    <h3>Данни от Microinvest</h3>
+    <p class="help">Продажбите се пазят локално след първото зареждане, а последните 3 дни се обновяват всеки път. Ако сте коригирали стари документи в Microinvest, изтеглете всичко наново.</p>
+    <button class="ghost" id="clearCache">Изтегли всичко наново</button>
+  </div>`;
+}
+
+document.addEventListener("click", async (e) => {
+  if (e.target.id === "saveConn") {
+    const msg = $("#connMsg");
+    msg.textContent = "Проверка…"; msg.className = "muted";
+    try {
+      const body = { apiBase: $("#sUrl").value, objectId: $("#sObj").value, operationTypes: $("#sTypes").value, withVat: $("#sVat").checked };
+      if ($("#sKey").value) body.apiKey = $("#sKey").value;
+      await api("/api/settings", body);
+      await refreshMeta();
+      if (S.meta.catalogError) throw new Error(S.meta.catalogError);
+      render();
+      $("#connMsg").textContent = `Връзката работи. Групи: ${S.meta.groups.length}.`;
+      load();
+    } catch (err) { render(); $("#connMsg").textContent = err.message; $("#connMsg").className = "err"; }
+  }
+  if (e.target.id === "clearCache") {
+    if (!confirm("Да изтегля ли наново всички продажби от Microinvest? Ръчните стойности се запазват.")) return;
+    await api("/api/clear-cache", {}); load();
+  }
+});
+document.addEventListener("change", async (e) => {
+  const t = e.target;
+  try {
+    if (t.dataset?.group) { await api("/api/groupmap", { groupId: t.dataset.group, col: t.value || null }); await refreshMeta(); load(); }
+    if (t.id === "sDefault") { await api("/api/settings", { defaultRevenueColumn: t.value }); await refreshMeta(); load(); }
+  } catch (err) { alert(err.message); }
+});
+
+init();
+</script>
+</body>
+</html>
