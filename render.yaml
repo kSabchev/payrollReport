@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: payroll-report-demo
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run demo
+    healthCheckPath: /
