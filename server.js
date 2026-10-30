@@ -19,6 +19,7 @@ const DEFAULT_DATA = {
     withVat: true,           // сумите с ДДС
     operationTypes: [2],     // 2 = Продажба
     defaultRevenueColumn: "goods", // къде отиват продажбите от групи без съпоставка
+    floatDefault: 8500,      // оборотни пари, предлагани при нулиране
   },
   revenueColumns: [
     { id: "service", name: "Сервиз" },
@@ -40,6 +41,8 @@ const DEFAULT_DATA = {
   expenses: {},        // "YYYY-MM-DD" -> { колона: число | [{name, value}] }
   revenueManual: {},   // "YYYY-MM-DD" -> { колона: число }  (ръчни стойности и корекции)
   cache: {},           // "YYYY-MM-DD" -> { byGroup: { групаId: сума }, fetchedAt }
+  float: [],           // нулирания на оборотните пари, по дата: [{ date, amount, at }]
+  floatBalance: {},    // "YYYY-MM-DD" -> оборотни − разходи в края на деня
 };
 
 let data = loadData();
@@ -171,6 +174,77 @@ async function syncRange(from, to, force) {
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
+// ---------------------------------------------------------------- Оборотни пари
+// Всеки месец оборотните пари се нулират (от 1-во число). Админът се пита на 1-во,
+// или на 2-ро, ако 1-во е неделя. Докато не потвърди, остатъкът продължава от предишния месец.
+
+// TODO: потребители и администратори; дотогава всички са админи
+const isAdmin = () => true;
+
+const monthStart = (s) => s.slice(0, 8) + "01";
+
+function resetPromptDay(month) {
+  const d = parse(month + "-01");
+  if (d.getDay() === 0) d.setDate(2);
+  return fmt(d);
+}
+
+function expenseTotal(date) {
+  const day = data.expenses[date];
+  if (!day) return 0;
+  let s = 0;
+  for (const c of data.expenseColumns) {
+    const v = day[c.id];
+    s += Array.isArray(v) ? v.reduce((a, i) => a + (i.value || 0), 0) : v || 0;
+  }
+  return s;
+}
+
+function ensureFloat() {
+  if (data.float.length) return false;
+  data.float.push({ date: monthStart(fmt(new Date())), amount: data.settings.floatDefault, at: Date.now() });
+  return true;
+}
+
+// Преизчислява остатъка за всеки ден от първото нулиране до днес. Връща true при промяна.
+function recomputeFloat() {
+  const out = {};
+  if (data.float.length) {
+    let i = 0, bal = 0;
+    for (const d of daysBetween(data.float[0].date, fmt(new Date()))) {
+      while (i < data.float.length && data.float[i].date === d) bal = data.float[i++].amount;
+      bal = round2(bal - expenseTotal(d));
+      out[d] = bal;
+    }
+  }
+  if (JSON.stringify(out) === JSON.stringify(data.floatBalance)) return false;
+  data.floatBalance = out;
+  return true;
+}
+
+function refreshFloat() {
+  if (ensureFloat() | recomputeFloat()) saveData();
+}
+
+function activeReset() {
+  const today = fmt(new Date());
+  return data.float.findLast((r) => r.date <= today) || null;
+}
+
+function floatStatus() {
+  const today = fmt(new Date()), month = today.slice(0, 7);
+  const due = today >= resetPromptDay(month) && !data.float.some((r) => r.date.startsWith(month));
+  return {
+    resets: data.float.map(({ date, amount }) => ({ date, amount })),
+    current: activeReset(),
+    balance: data.floatBalance[today] ?? null,
+    default: data.settings.floatDefault,
+    pendingReset: due ? { date: month + "-01" } : null,
+  };
+}
+
+const balancesFor = (from, to) => Object.fromEntries(daysBetween(from, to).map((d) => [d, data.floatBalance[d] ?? null]));
+
 function buildReport(from, to) {
   const days = daysBetween(from, to).map((date) => {
     const api = {};
@@ -186,7 +260,8 @@ function buildReport(from, to) {
     const manual = data.revenueManual[date] || {};
     const revenue = {};
     for (const c of data.revenueColumns) revenue[c.id] = manual[c.id] ?? api[c.id];
-    return { date, revenue, revenueApi: api, edited: Object.keys(manual), loaded: !!cached, expenses: data.expenses[date] || {} };
+    return { date, revenue, revenueApi: api, edited: Object.keys(manual), loaded: !!cached, expenses: data.expenses[date] || {},
+      balance: data.floatBalance[date] ?? null };
   });
   return days;
 }
@@ -226,11 +301,13 @@ function slug(name, existing) {
 
 const handlers = {
   "GET /api/state": async () => {
+    refreshFloat();
     let groups = catalog.groups, catalogError = null;
     try { groups = (await loadCatalog()).groups; } catch (e) { catalogError = e.message; }
     const { apiKey, ...settings } = data.settings;
     return { settings: { ...settings, hasApiKey: !!apiKey }, revenueColumns: data.revenueColumns, expenseColumns: data.expenseColumns,
-      groupMap: data.groupMap, groups, mappedColumns: mappedColumns(), catalogError, mock: MOCK };
+      groupMap: data.groupMap, groups, mappedColumns: mappedColumns(), catalogError, mock: MOCK,
+      isAdmin: isAdmin(), float: floatStatus() };
   },
 
   "GET /api/report": async (q) => {
@@ -238,7 +315,8 @@ const handlers = {
     if (!isDate(from) || !isDate(to) || from > to) throw new Error("Невалиден период");
     let syncError = null;
     try { await syncRange(from, to, q.get("force") === "1"); } catch (e) { syncError = e.message; }
-    return { days: buildReport(from, to), syncError, mappedColumns: mappedColumns() };
+    refreshFloat();
+    return { days: buildReport(from, to), syncError, mappedColumns: mappedColumns(), float: floatStatus() };
   },
 
   // Продажбите от Microinvest за един ден и една колона — за проверка
@@ -276,8 +354,32 @@ const handlers = {
       if (v === null) delete day[b.col]; else day[b.col] = v;
     }
     if (!Object.keys(day).length) delete data.expenses[b.date];
+    recomputeFloat();
     saveData();
-    return { ok: true, value: day[b.col] ?? null };
+    const balances = isDate(b.from) && isDate(b.to) && b.from <= b.to ? balancesFor(b.from, b.to) : {};
+    return { ok: true, value: day[b.col] ?? null, balances, float: floatStatus() };
+  },
+
+  // action "set" — променя сумата на текущия месец; "reset" — нулира от 1-во число на месеца
+  "POST /api/float": async (_, b) => {
+    if (!isAdmin()) throw new Error("Само администратор може да променя оборотните пари");
+    const amount = num(b.amount);
+    if (amount === null || amount < 0) throw new Error("Въведете сума на оборотните пари");
+    if (b.action === "set") {
+      const r = activeReset();
+      if (!r) throw new Error("Няма начална сума на оборотните пари");
+      r.amount = amount;
+    } else if (b.action === "reset") {
+      const date = monthStart(fmt(new Date()));
+      const r = data.float.find((x) => x.date === date);
+      if (r) Object.assign(r, { amount, at: Date.now() });
+      else data.float.push({ date, amount, at: Date.now() });
+      data.float.sort((x, y) => x.date.localeCompare(y.date));
+    } else throw new Error("Невалидно действие");
+    data.settings.floatDefault = amount;
+    recomputeFloat();
+    saveData();
+    return { ok: true, float: floatStatus() };
   },
 
   "POST /api/revenue": async (_, b) => {
@@ -313,6 +415,7 @@ const handlers = {
       const i = list.findIndex((x) => x.id === b.id), j = i + (b.dir < 0 ? -1 : 1);
       if (i >= 0 && j >= 0 && j < list.length) [list[i], list[j]] = [list[j], list[i]];
     } else throw new Error("Невалидно действие");
+    if (b.table === "expense") recomputeFloat();
     saveData();
     return { ok: true };
   },
