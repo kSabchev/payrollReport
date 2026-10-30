@@ -37,6 +37,7 @@
   .ghost { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 12px; }
   .spacer { flex: 1; }
   .datepick { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 5px 8px; }
+  .range { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
 
   /* Обобщение */
   .summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line);
@@ -45,6 +46,9 @@
   .summary span { display: block; color: var(--muted); font-size: 13px; }
   .summary strong { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .summary .r strong { color: var(--rev); } .summary .e strong { color: var(--exp); }
+  .summary small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .summary button.link { border: 0; background: none; padding: 0; color: var(--accent); }
+  .summary button.link:hover { text-decoration: underline; }
   @media (max-width: 600px) { .summary strong { font-size: 18px; } .period { min-width: 0; font-size: 17px; } }
 
   /* Табове */
@@ -53,6 +57,7 @@
   .tabs button[aria-selected=true] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
   .tabs button.ghost { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 5px 12px; color: var(--ink); }
   .tabs button.ghost:disabled { opacity: .6; }
+  .tabs button.ghost[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
   .tabs .sync { margin-left: auto; align-self: center; font-size: 12px; color: var(--muted); padding-right: 4px; }
 
   .notice { margin: 10px 0 0; padding: 10px 12px; border-left: 3px solid var(--exp); background: var(--surface); border-radius: 4px; }
@@ -138,6 +143,7 @@
     <div class="seg" id="modes" role="group" aria-label="Период">
       <button data-mode="day">Ден</button><button data-mode="month">Месец</button>
       <button data-mode="quarter">Тримесечие</button><button data-mode="year">Година</button>
+      <button data-mode="range">Период</button>
     </div>
     <div class="nav">
       <button class="arrow" id="prev" aria-label="Предишен период">‹</button>
@@ -146,23 +152,27 @@
     </div>
     <button class="ghost" id="todayBtn">Днес</button>
     <input type="date" class="datepick" id="datePick" aria-label="Избор на дата">
+    <span class="range" id="rangePick" hidden>
+      <input type="date" class="datepick" id="fromPick" aria-label="От дата"> –
+      <input type="date" class="datepick" id="toPick" aria-label="До дата">
+    </span>
     <div class="seg" id="grouping" role="group" aria-label="Редове" hidden>
       <button data-group="day">По дни</button><button data-group="month">По месеци</button>
     </div>
   </div>
 
   <div class="summary">
-    <div class="r"><span>Приходи</span><strong id="sumRev">—</strong></div>
     <div class="e"><span>Разходи</span><strong id="sumExp">—</strong></div>
-    <div><span>Резултат</span><strong id="sumRes">—</strong></div>
+    <div class="r"><span>Приходи</span><strong id="sumRev">—</strong></div>
+    <div><span>Оборотни − разходи</span><strong id="sumFloat">—</strong><small id="floatInfo"></small></div>
   </div>
 
   <div class="tabs" role="tablist">
-    <button role="tab" data-tab="revenue">Приходи</button>
     <button role="tab" data-tab="expense">Разходи</button>
-    <button role="tab" data-tab="turnover">Оборот</button>
+    <button role="tab" data-tab="revenue">Приходи</button>
     <button role="tab" data-tab="settings">Настройки</button>
     <span class="sync" id="syncInfo"></span>
+    <button class="ghost" id="editCols" style="align-self:center;margin-bottom:4px" title="Преименуване, подреждане и добавяне на колони">Редактирай колони</button>
     <button class="ghost" id="refresh" style="align-self:center;margin-bottom:4px">Обнови от Microinvest</button>
   </div>
   <div id="view"></div>
@@ -195,12 +205,20 @@ async function api(path, body) {
 
 // ------------------------------------------------------------ Състояние
 const S = {
-  mode: "month", anchor: fmt(new Date()), group: "month", tab: "revenue",
+  mode: "month", anchor: fmt(new Date()), from: null, to: null, group: "month", tab: "expense", editCols: false,
   meta: null, days: [], syncError: null, loading: false, loadedAt: null,
 };
 const today = () => fmt(new Date());
 
+const addDays = (s, n) => { const d = parse(s); d.setDate(d.getDate() + n); return fmt(d); };
+const spanDays = (from, to) => Math.round((parse(to) - parse(from)) / 864e5) + 1;
+const short = (s, withYear) => { const d = parse(s); return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}${withYear ? "." + d.getFullYear() : ""}`; };
+
 function period() {
+  if (S.mode === "range") {
+    const label = S.from === S.to ? short(S.from, true) : `${short(S.from, S.from.slice(0, 4) !== S.to.slice(0, 4))} – ${short(S.to, true)}`;
+    return { from: S.from, to: S.to, label };
+  }
   const a = parse(S.anchor), y = a.getFullYear(), mo = a.getMonth();
   if (S.mode === "day") return { from: S.anchor, to: S.anchor, label: `${WD[a.getDay()]}, ${a.getDate()} ${MONTHS[mo]} ${y}` };
   if (S.mode === "month") return { from: fmt(new Date(y, mo, 1)), to: fmt(new Date(y, mo + 1, 0)), label: `${cap(MONTHS[mo])} ${y}` };
@@ -209,6 +227,11 @@ function period() {
 }
 
 function shift(dir) {
+  if (S.mode === "range") {
+    const n = spanDays(S.from, S.to) * dir;
+    S.from = addDays(S.from, n); S.to = addDays(S.to, n);
+    return load();
+  }
   const a = parse(S.anchor);
   if (S.mode === "day") a.setDate(a.getDate() + dir);
   else { a.setDate(1); a.setMonth(a.getMonth() + dir * (S.mode === "month" ? 1 : S.mode === "quarter" ? 3 : 12)); }
@@ -216,7 +239,8 @@ function shift(dir) {
   load();
 }
 
-const byGroupRows = () => (S.mode === "quarter" || S.mode === "year") && S.group === "month";
+const canGroup = () => S.mode === "quarter" || S.mode === "year" || (S.mode === "range" && spanDays(S.from, S.to) > 31);
+const byGroupRows = () => canGroup() && S.group === "month";
 
 // ------------------------------------------------------------ Изчисления
 const revCols = () => S.meta.revenueColumns;
@@ -251,31 +275,56 @@ async function load(force) {
   S.loading = true; updateChrome();
   try {
     const r = await api(`/api/report?from=${p.from}&to=${p.to}${force ? "&force=1" : ""}`);
-    S.days = r.days; S.syncError = r.syncError; S.meta.mappedColumns = r.mappedColumns; S.loadedAt = new Date();
+    S.days = r.days; S.syncError = r.syncError; S.meta.mappedColumns = r.mappedColumns; S.meta.float = r.float; S.loadedAt = new Date();
   } catch (e) { S.syncError = e.message; S.days = []; }
   S.loading = false;
   render();
+  askFloatReset();
 }
 
 function updateChrome() {
   const p = period();
   $("#periodLabel").textContent = p.label;
+  const range = S.mode === "range";
+  $("#datePick").hidden = range; $("#rangePick").hidden = !range;
   $("#datePick").value = S.anchor;
+  if (range) { $("#fromPick").value = S.from; $("#toPick").value = S.to; }
   document.querySelectorAll("#modes button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.mode === S.mode));
-  $("#grouping").hidden = !(S.mode === "quarter" || S.mode === "year");
+  $("#grouping").hidden = !canGroup();
   document.querySelectorAll("#grouping button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.group === S.group));
   document.querySelectorAll(".tabs [role=tab]").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === S.tab));
   $("#refresh").disabled = S.loading;
+  $("#editCols").hidden = S.tab === "settings";
+  $("#editCols").setAttribute("aria-pressed", S.editCols);
+  $("#editCols").textContent = S.editCols ? "Готово" : "Редактирай колони";
   $("#syncInfo").textContent = S.loading ? "Зареждане…" : S.loadedAt ? `Обновено ${S.loadedAt.toLocaleTimeString("bg-BG", { hour: "2-digit", minute: "2-digit" })}${S.meta.mock ? " · демо данни" : ""}` : "";
 }
 
 function bindChrome() {
-  $("#modes").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.mode = b.dataset.mode; load(); };
+  $("#modes").onclick = (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    if (b.dataset.mode === "range" && S.mode !== "range") { const p = period(); S.from = p.from; S.to = p.to; }
+    if (b.dataset.mode !== "range" && S.mode === "range") S.anchor = S.from;
+    S.mode = b.dataset.mode; load();
+  };
   $("#grouping").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.group = b.dataset.group; render(); };
   $("#prev").onclick = () => shift(-1);
   $("#next").onclick = () => shift(1);
-  $("#todayBtn").onclick = () => { S.anchor = today(); load(); };
+  $("#todayBtn").onclick = () => {
+    if (S.mode === "range") { S.from = addDays(today(), 1 - spanDays(S.from, S.to)); S.to = today(); }
+    else S.anchor = today();
+    load();
+  };
   $("#datePick").onchange = (e) => { if (e.target.value) { S.anchor = e.target.value; load(); } };
+  const pickRange = () => {
+    let f = $("#fromPick").value, t = $("#toPick").value;
+    if (!f || !t) return;
+    if (f > t) [f, t] = [t, f];
+    S.from = f; S.to = t; load();
+  };
+  $("#fromPick").onchange = pickRange;
+  $("#toPick").onchange = pickRange;
+  $("#editCols").onclick = () => { S.editCols = !S.editCols; render(); };
   $("#refresh").onclick = () => load(true);
   document.querySelector(".tabs").onclick = (e) => { const b = e.target.closest("[role=tab]"); if (!b) return; S.tab = b.dataset.tab; render(); };
 }
@@ -283,11 +332,9 @@ function bindChrome() {
 // ------------------------------------------------------------ Рендиране
 function render() {
   updateChrome();
-  const tr = sum(S.days, revTotal), te = sum(S.days, expTotal), res = tr - te;
-  $("#sumRev").textContent = m(tr);
-  $("#sumExp").textContent = m(te);
-  $("#sumRes").textContent = m(res);
-  $("#sumRes").className = res < 0 ? "neg" : "";
+  $("#sumRev").textContent = m(sum(S.days, revTotal));
+  $("#sumExp").textContent = m(sum(S.days, expTotal));
+  renderFloat();
 
   // запазване на фокуса между прерисуванията
   const focusKey = document.activeElement?.dataset?.key;
@@ -296,7 +343,6 @@ function render() {
   let html = "";
   if (S.tab === "revenue") html = revenueTable();
   else if (S.tab === "expense") html = expenseTable();
-  else if (S.tab === "turnover") html = turnoverTable();
   else html = settingsView();
   $("#view").innerHTML = (S.tab !== "settings" ? notice : "") + html;
 
@@ -319,8 +365,10 @@ function rowClass(r) {
   if (r.key > today()) c.push("future");
   return c.join(" ");
 }
-const colHead = (table, c) => `<th class="colhead" data-colmenu="${table}|${c.id}" tabindex="0" title="Преименуване, подреждане, изтриване">${esc(c.name)}</th>`;
-const addHead = (table) => `<th class="add"><button data-addcol="${table}">+ Колона</button></th>`;
+const colHead = (table, c) => S.editCols
+  ? `<th class="colhead" data-colmenu="${table}|${c.id}" tabindex="0" title="Преименуване, подреждане, изтриване">✎ ${esc(c.name)}</th>`
+  : `<th>${esc(c.name)}</th>`;
+const addHead = (table) => S.editCols ? `<th class="add"><button data-addcol="${table}">+ Колона</button></th>` : `<th></th>`;
 
 function revenueTable() {
   const cols = revCols(), mapped = new Set(S.meta.mappedColumns), R = rows();
@@ -359,35 +407,21 @@ function expenseTable() {
       const v = d.expenses[c.id];
       return `<td><input data-key="${key}" data-exp="${d.date}|${c.id}" inputmode="decimal" value="${v != null ? m(v) : ""}" aria-label="${esc(c.name)} ${d.date}"></td>`;
     }).join("");
-    return `<tr class="${rowClass(r)}">${rowHead(r)}<td class="total"><span class="v">${m(sum(r.days, expTotal))}</span></td>${cells}<td></td></tr>`;
+    return `<tr class="${rowClass(r)}">${rowHead(r)}<td class="total"><span class="v">${m(sum(r.days, expTotal))}</span></td>${balCell(r.days)}${cells}<td></td></tr>`;
   }).join("");
   const foot = cols.map((c) => `<td>${m(sum(S.days, (d) => expVal(d, c)))}</td>`).join("");
+  const endBal = lastBalance(S.days);
   return `<div class="tablewrap"><table>
-    <thead><tr><th>${byGroupRows() ? "Месец" : "Дата"}</th><th class="total">Общо</th>${cols.map((c) => colHead("expense", c)).join("")}${addHead("expense")}</tr></thead>
+    <thead><tr><th>${byGroupRows() ? "Месец" : "Дата"}</th><th class="total">Общо</th><th title="Оборотни пари минус разходите от началото на месеца">Остатък</th>${cols.map((c) => colHead("expense", c)).join("")}${addHead("expense")}</tr></thead>
     <tbody>${body}</tbody>
-    <tfoot><tr><th>Общо</th><td>${m(sum(S.days, expTotal))}</td>${foot}<td></td></tr></tfoot></table></div>`;
+    <tfoot><tr><th>Общо</th><td>${m(sum(S.days, expTotal))}</td><td class="${endBal < 0 ? "neg" : ""}">${endBal == null ? "" : m(endBal)}</td>${foot}<td></td></tr></tfoot></table></div>`;
 }
 
-function turnoverTable() {
-  const R = rows();
-  if (!R.length) return `<div class="tablewrap"><div class="empty">Няма данни за периода.</div></div>`;
-  let running = 0;
-  const body = R.map((r) => {
-    const rv = sum(r.days, revTotal), ex = sum(r.days, expTotal), res = rv - ex;
-    running += res;
-    return `<tr class="${rowClass(r)}">${rowHead(r)}
-      <td><button class="cell" data-goto="revenue|${r.key}" title="Към Приходи">${m(rv)}</button></td>
-      <td><button class="cell" data-goto="expense|${r.key}" title="Към Разходи">${m(ex)}</button></td>
-      <td class="total ${res < 0 ? "neg" : ""}"><span class="v">${m(res)}</span></td>
-      <td class="${running < 0 ? "neg" : ""}"><span class="v">${m(running)}</span></td></tr>`;
-  }).join("");
-  const tr = sum(S.days, revTotal), te = sum(S.days, expTotal);
-  const margin = tr ? ((tr - te) / tr) * 100 : 0;
-  return `<div class="tablewrap"><table>
-    <thead><tr><th>${byGroupRows() ? "Месец" : "Дата"}</th><th>Приходи</th><th>Разходи</th><th class="total">Резултат</th><th>Натрупано</th></tr></thead>
-    <tbody>${body}</tbody>
-    <tfoot><tr><th>Общо</th><td class="pos">${m(tr)}</td><td class="neg">${m(te)}</td><td class="${tr - te < 0 ? "neg" : ""}">${m(tr - te)}</td>
-    <td class="muted">${tr ? `Марж ${qfmt.format(Math.round(margin * 10) / 10)}%` : ""}</td></tr></tfoot></table></div>`;
+// Остатък в края на последния ден с изчислена стойност
+const lastBalance = (days) => days.findLast((d) => d.balance != null)?.balance ?? null;
+function balCell(days) {
+  const b = lastBalance(days);
+  return `<td class="${b < 0 ? "neg" : "muted"}"><span class="v">${b == null ? "" : m(b)}</span></td>`;
 }
 
 // ------------------------------------------------------------ Редакция в таблицата
@@ -401,8 +435,8 @@ document.addEventListener("change", async (e) => {
   const day = S.days.find((d) => d.date === date);
   try {
     if (t.dataset.exp) {
-      await api("/api/expense", { date, col, value: n });
-      if (n === null) delete day.expenses[col]; else day.expenses[col] = n;
+      const r = await saveExpense({ date, col, value: n });
+      if (r.value === null) delete day.expenses[col]; else day.expenses[col] = r.value;
     } else {
       await api("/api/revenue", { date, col, value: n });
       day.revenue[col] = n ?? day.revenueApi[col];
@@ -429,14 +463,10 @@ document.addEventListener("click", (e) => {
   const d = t.dataset;
   if (d.goday) { S.mode = "day"; S.anchor = d.goday; load(); }
   else if (d.gomonth) { S.mode = "month"; S.anchor = d.gomonth + "-01"; load(); }
-  else if (d.goto) {
-    const [tab, key] = d.goto.split("|");
-    S.tab = tab;
-    if (key.length === 7) { S.mode = "month"; S.anchor = key + "-01"; load(); } else render();
-  }
   else if (d.revdetail) openRevenue(...d.revdetail.split("|"));
   else if (d.explist) openList(...d.explist.split("|"));
   else if (d.addcol) openAddColumn(d.addcol);
+  else if (t.id === "editFloat") openFloat();
   else if (d.colmenu) openColumn(...d.colmenu.split("|"));
 });
 document.addEventListener("keydown", (e) => {
@@ -507,7 +537,7 @@ function openList(date, colId) {
       $("#save", root).onclick = async () => {
         if (items.some((i) => Number.isNaN(i.value))) return alert("Има невалидна сума");
         try {
-          const r = await api("/api/expense", { date, col: colId, items });
+          const r = await saveExpense({ date, col: colId, items });
           if (r.value) day.expenses[colId] = r.value; else delete day.expenses[colId];
           closeDialog(); render();
         } catch (err) { alert(err.message); }
@@ -555,6 +585,69 @@ function openColumn(table, id) {
 }
 
 async function refreshMeta() { S.meta = await api("/api/state"); }
+
+// ------------------------------------------------------------ Оборотни пари
+// Записва разход и обновява остатъка за показания период
+async function saveExpense(body) {
+  const p = period();
+  const r = await api("/api/expense", { ...body, from: p.from, to: p.to });
+  for (const d of S.days) if (d.date in r.balances) d.balance = r.balances[d.date];
+  S.meta.float = r.float;
+  return r;
+}
+
+function renderFloat() {
+  const f = S.meta.float, last = S.days.findLast((d) => d.balance != null);
+  $("#sumFloat").textContent = last ? m(last.balance) : "—";
+  $("#sumFloat").className = last?.balance < 0 ? "neg" : "";
+  const reset = last && f.resets.findLast((r) => r.date <= last.date);
+  const info = last ? `към ${short(last.date, true)} · оборотни ${m(reset?.amount)}` : "няма данни за периода";
+  const edit = S.meta.isAdmin && f.current ? ` · <button class="link" id="editFloat">Промени</button>` : "";
+  $("#floatInfo").innerHTML = esc(info) + edit;
+}
+
+const monthLabel = (s) => { const d = parse(s); return `${MONTHS[d.getMonth()]} ${d.getFullYear()}`; };
+
+function floatDialog({ title, sub, amount, okLabel, cancelLabel, onOk }) {
+  showDialog(`<h2>${title}</h2><p class="sub">${sub}</p>
+    <div class="row"><label for="famount" style="flex:0 0 auto">Оборотни пари</label>
+      <input id="famount" class="field amount" inputmode="decimal" value="${m(amount)}"></div>
+    <div class="actions"><button class="ghost" id="cancel">${cancelLabel}</button><button class="primary" id="ok">${okLabel}</button></div>`, (root) => {
+    $("#cancel", root).onclick = closeDialog;
+    const ok = async () => {
+      const n = toNum($("#famount", root).value);
+      if (n === null || Number.isNaN(n) || n < 0) return alert("Въведете сума");
+      try { await onOk(n); closeDialog(); load(); } catch (err) { alert(err.message); }
+    };
+    $("#ok", root).onclick = ok;
+    $("#famount", root).onkeydown = (e) => { if (e.key === "Enter") ok(); };
+  });
+  setTimeout(() => $("#famount")?.select(), 0);
+}
+
+function openFloat() {
+  const c = S.meta.float.current;
+  floatDialog({
+    title: "Оборотни пари", sub: `За ${monthLabel(c.date)}, от ${short(c.date, true)}. Остатъкът се преизчислява от тази дата.`,
+    amount: c.amount, okLabel: "Запази", cancelLabel: "Отказ",
+    onOk: (amount) => api("/api/float", { action: "set", amount }),
+  });
+}
+
+// Нулиране в началото на месеца: пита се веднъж на сесия, докато админ не потвърди (на 1-во или 2-ро число)
+function askFloatReset() {
+  const f = S.meta.float, p = f?.pendingReset;
+  if (!S.meta.isAdmin || !p || dlg.open) return;
+  const key = "floatResetLater:" + p.date;
+  if (sessionStorage.getItem(key)) return;
+  sessionStorage.setItem(key, "1");
+  const bal = f.balance != null ? ` Остатък в момента: ${m(f.balance)}.` : "";
+  floatDialog({
+    title: "Нулиране на оборотните пари", sub: `Започва ${monthLabel(p.date)}. Да започне ли месецът с нова сума?${bal}`,
+    amount: f.default, okLabel: "Нулирай", cancelLabel: "По-късно",
+    onOk: (amount) => api("/api/float", { action: "reset", amount }),
+  });
+}
 
 // ------------------------------------------------------------ Настройки
 function settingsView() {
