@@ -121,18 +121,24 @@ async function query(text, params = {}) {
     for (const [k, [type, v]] of Object.entries(params)) req.input(k, type, v);
     return (await req.query(text)).recordset;
   } catch (e) {
+    console.error("SQL:", e.code || "", e.message);
     const p = pool; pool = null; (await p?.catch(() => null))?.close().catch(() => {});
     throw new Error(friendlySqlError(e));
   }
 }
 
+// Датите се подават като параметри от тип date, без превръщане от текст в SQL.
+// Драйверът праща Date в UTC, затова денят се създава в UTC и се чете обратно в UTC.
+const toSqlDate = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d)); };
+const fromSqlDate = (d) => d.toISOString().slice(0, 10);
+
 // Общи условия: вид операция, период (дати като "YYYY-MM-DD"), обект
 function salesFilter(from, to) {
   const s = data.settings;
-  const params = { from: [sql.VarChar(10), from], to: [sql.VarChar(10), to], vat: [sql.Bit, s.withVat] };
+  const params = { from: [sql.Date, toSqlDate(from)], to: [sql.Date, toSqlDate(to)], vat: [sql.Bit, s.withVat] };
   const types = s.operationTypes.map((t, i) => { params["t" + i] = [sql.Int, t]; return "@t" + i; });
   let where = `o.OperType IN (${types.join(", ")})
-    AND o.[Date] >= CONVERT(datetime, @from, 23) AND o.[Date] < DATEADD(day, 1, CONVERT(datetime, @to, 23))`;
+    AND o.[Date] >= @from AND o.[Date] < DATEADD(day, 1, @to)`;
   if (s.objectId != null) { where += " AND o.ObjectID = @obj"; params.obj = [sql.Int, s.objectId]; }
   return { where, params };
 }
@@ -143,12 +149,13 @@ const source = MOCK ? null : {
   groups: () => query("SELECT ID AS id, Code AS code, Name AS name FROM GoodsGroups"),
 
   // [{ day, groupId, amount }]
-  salesByGroup(from, to) {
+  async salesByGroup(from, to) {
     const { where, params } = salesFilter(from, to);
-    return query(`SELECT CONVERT(char(10), o.[Date], 23) AS day, g.GroupID AS groupId, SUM(${AMOUNT}) AS amount
+    const rows = await query(`SELECT CAST(o.[Date] AS date) AS day, g.GroupID AS groupId, SUM(${AMOUNT}) AS amount
       FROM Operations o LEFT JOIN Goods g ON g.ID = o.GoodID
       WHERE ${where}
-      GROUP BY CONVERT(char(10), o.[Date], 23), g.GroupID`, params);
+      GROUP BY CAST(o.[Date] AS date), g.GroupID`, params);
+    return rows.map((r) => ({ ...r, day: fromSqlDate(r.day) }));
   },
 
   // [{ goodId, name, code, groupId, doc, qtty, amount }] за един ден
