@@ -196,8 +196,9 @@ const WD = ["нд", "пн", "вт", "ср", "чт", "пт", "сб"];
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 const toNum = (v) => { const s = String(v ?? "").trim().replace(/\s/g, "").replace(",", "."); if (!s) return null; const n = Number(s); return Number.isFinite(n) ? n : NaN; };
 
+// Относителен адрес, за да работи и под подпът (напр. https://сървър/payroll/).
 async function api(path, body) {
-  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const r = await fetch(path.replace(/^\//, ""), body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
   const j = await r.json().catch(() => ({ error: "Невалиден отговор от сървъра" }));
   if (!r.ok) throw new Error(j.error || "Грешка");
   return j;
