@@ -80,9 +80,27 @@
 
    Проверка: на сървъра отворете http://127.0.0.1:3001.
 3. **Tailscale.** Ако на сървъра вече има друго приложение зад `tailscale serve`,
-   вижте какво е заето с `tailscale serve status` и изберете едно от двете:
+   вижте какво е заето с `tailscale serve status` и изберете един от начините:
 
-   - отделен HTTPS порт (препоръчително, не пипа другото приложение):
+   - **собствено име `payroll`** чрез [Tailscale Services](https://tailscale.com/kb/1552/tailscale-services).
+     Нужни са Tailscale 1.86 или по-нов и сървър с таг (напр. `tag:server`), а не
+     вписан с потребителски акаунт. Смяната на тага сменя самоличността на сървъра,
+     затова проверете дали правилата (ACL) за другото приложение още важат.
+     1. В админ панела → **Services** → **Advertise** → **Define a Service**: име `payroll`,
+        порт `tcp:443`.
+     2. В правилата за достъп (Access controls) разрешете достъпа:
+
+        ```json
+        "grants": [{ "src": ["autogroup:member"], "dst": ["svc:payroll"], "ip": ["443"] }]
+        ```
+     3. На сървъра (без `--bg`, услугата работи на заден план сама):
+
+            tailscale serve --service=svc:payroll --https=443 127.0.0.1:3001
+
+     4. В админ панела → **Services** → `svc:payroll` одобрете сървъра (**Approve**).
+
+     Адрес: `https://payroll.<tailnet>.ts.net`
+   - отделен HTTPS порт (най-лесно, не пипа другото приложение):
 
          tailscale serve --bg --https=8443 http://127.0.0.1:3001
 
