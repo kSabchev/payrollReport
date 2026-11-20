@@ -61,6 +61,47 @@
 Сумите са по реалната продажна цена от документа (`Operations.PriceOut` + ДДС), включително
 цените, сменени в панела за продажба.
 
+## Инсталиране на сървъра (услуга + Tailscale)
+
+Програмата няма вход с парола, затова не я отваряйте към интернет. Достъпът е само
+през Tailscale, а самата програма слуша само на `127.0.0.1`.
+
+1. В `.env` задайте `PORT=3001` и `HOST=127.0.0.1` (вижте `.env.example`).
+2. **Услуга на Windows** с [NSSM](https://nssm.cc), в PowerShell като администратор
+   (сменете пътищата):
+
+   ```powershell
+   nssm install PayrollReport "C:\Program Files\nodejs\node.exe" "C:\PayrollReport\server.js"
+   nssm set PayrollReport AppDirectory "C:\PayrollReport"
+   nssm set PayrollReport AppStdout "C:\PayrollReport\logs\out.log"
+   nssm set PayrollReport AppStderr "C:\PayrollReport\logs\err.log"
+   nssm start PayrollReport
+   ```
+
+   Проверка: на сървъра отворете http://127.0.0.1:3001.
+3. **Tailscale.** Ако на сървъра вече има друго приложение зад `tailscale serve`,
+   вижте какво е заето с `tailscale serve status` и изберете едно от двете:
+
+   - отделен HTTPS порт (препоръчително, не пипа другото приложение):
+
+         tailscale serve --bg --https=8443 http://127.0.0.1:3001
+
+     Адрес: `https://<сървър>.<tailnet>.ts.net:8443`
+   - подпът на същия адрес:
+
+         tailscale serve --bg --set-path /payroll http://127.0.0.1:3001
+
+     Адрес: `https://<сървър>.<tailnet>.ts.net/payroll/` (с наклонена черта накрая).
+
+   В админ панела на Tailscale трябва да е включен HTTPS (DNS → HTTPS Certificates).
+   Не използвайте `tailscale funnel`, защото прави програмата публична.
+
+Обновяване:
+
+    git pull
+    npm ci
+    nssm restart PayrollReport
+
 ## Оборотни пари
 
 Горе вдясно се показва „Оборотни − разходи“: оборотните пари минус разходите от началото

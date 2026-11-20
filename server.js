@@ -10,6 +10,7 @@ try { process.loadEnvFile(path.join(__dirname, ".env")); } catch {}
 
 const MOCK = process.env.MOCK === "1";
 const PORT = Number(process.env.PORT || 3000);
+const HOST = process.env.HOST || undefined; // 127.0.0.1 = само от този компютър (напр. зад tailscale serve)
 const DATA_FILE = path.join(__dirname, MOCK ? "data-demo.json" : "data.json");
 const RECENT_DAYS = 3; // последните N дни винаги се презареждат от базата
 
@@ -526,8 +527,8 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(404); res.end();
 });
 
-server.listen(PORT, () => {
-  console.log(`Отчет: http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`Отчет: http://${HOST || "localhost"}:${PORT}`);
   const c = connectionInfo();
   console.log(MOCK ? "Демо режим с примерни данни" : c.configured ? `Microinvest: ${c.server}, база ${c.database}, потребител ${c.user}`
     : "Внимание: връзката с базата не е настроена (вижте .env.example)");
