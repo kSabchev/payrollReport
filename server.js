@@ -1,20 +1,21 @@
-// Отчет приходи / разходи / оборот с данни от Microinvest Склад Про
-// Node.js 18+, без външни пакети.  Старт: node server.js   Демо: MOCK=1 node server.js
+// Отчет приходи / разходи с данни от базата на Microinvest Склад Про (SQL Server)
+// Node.js 20.12+.  Старт: node server.js   Демо: MOCK=1 node server.js
+// Връзката с базата се настройва в .env (вижте .env.example).
 
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
 
+try { process.loadEnvFile(path.join(__dirname, ".env")); } catch {}
+
 const MOCK = process.env.MOCK === "1";
 const PORT = Number(process.env.PORT || 3000);
 const DATA_FILE = path.join(__dirname, MOCK ? "data-demo.json" : "data.json");
-const RECENT_DAYS = 3; // последните N дни винаги се презареждат от Microinvest
+const RECENT_DAYS = 3; // последните N дни винаги се презареждат от базата
 
 // ---------------------------------------------------------------- Данни
 const DEFAULT_DATA = {
   settings: {
-    apiBase: process.env.MI_URL || "http://127.0.0.1:8700",
-    apiKey: process.env.MI_KEY || "",
     objectId: null,          // null = всички обекти
     withVat: true,           // сумите с ДДС
     operationTypes: [2],     // 2 = Продажба
@@ -37,7 +38,7 @@ const DEFAULT_DATA = {
     { id: "phones", name: "Телефони" },
     { id: "eshop", name: "Онлайн магазин" },
   ],
-  groupMap: {},        // id на група в Microinvest -> id на колона в Приходи
+  groupMap: {},        // id на група в Microinvest -> id на колона в Приходи (подгрупите наследяват)
   expenses: {},        // "YYYY-MM-DD" -> { колона: число | [{name, value}] }
   revenueManual: {},   // "YYYY-MM-DD" -> { колона: число }  (ръчни стойности и корекции)
   cache: {},           // "YYYY-MM-DD" -> { byGroup: { групаId: сума }, fetchedAt }
@@ -50,7 +51,8 @@ let data = loadData();
 function loadData() {
   try {
     const d = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-    return { ...structuredClone(DEFAULT_DATA), ...d, settings: { ...DEFAULT_DATA.settings, ...d.settings } };
+    const { apiBase, apiKey, ...settings } = d.settings || {}; // от старата връзка през HTTP
+    return { ...structuredClone(DEFAULT_DATA), ...d, settings: { ...DEFAULT_DATA.settings, ...settings } };
   } catch {
     const d = structuredClone(DEFAULT_DATA);
     if (MOCK) d.groupMap = { 1: "phones", 3: "prima", 4: "service" };
@@ -76,49 +78,109 @@ function daysBetween(from, to) {
   return out;
 }
 
-// ---------------------------------------------------------------- Microinvest API
-async function miGet(p, params = {}) {
-  if (MOCK) return mockGet(p, params);
-  const s = data.settings;
-  const url = new URL(s.apiBase.replace(/\/$/, "") + p);
-  for (const [k, v] of Object.entries(params)) if (v !== null && v !== undefined && v !== "") url.searchParams.set(k, v);
-  const headers = { Accept: "application/json" };
-  if (s.apiKey) headers["X-API-Key"] = s.apiKey;
-  let res;
+// ---------------------------------------------------------------- База на Microinvest
+// Чете се само от Operations, Goods и GoodsGroups. Продажбите се сумират в базата по ден и група.
+const sql = MOCK ? null : require("mssql");
+
+// Сървърът може да е "localhost" или "localhost\SQLEXPRESS" (именувана инстанция)
+function sqlConfig() {
+  const e = process.env;
+  const [server, instanceName] = String(e.MI_SQL_SERVER || "localhost").split("\\");
+  return {
+    server, database: e.MI_SQL_DATABASE, user: e.MI_SQL_USER, password: e.MI_SQL_PASSWORD,
+    port: e.MI_SQL_PORT ? Number(e.MI_SQL_PORT) : undefined,
+    options: { instanceName, encrypt: e.MI_SQL_ENCRYPT === "1", trustServerCertificate: true },
+    pool: { max: 3, min: 0, idleTimeoutMillis: 60000 },
+    connectionTimeout: 10000, requestTimeout: 60000,
+  };
+}
+
+function connectionInfo() {
+  if (MOCK) return { mock: true };
+  const e = process.env;
+  return { server: e.MI_SQL_SERVER || "localhost", database: e.MI_SQL_DATABASE || "", user: e.MI_SQL_USER || "",
+    configured: !!(e.MI_SQL_DATABASE && e.MI_SQL_USER && e.MI_SQL_PASSWORD) };
+}
+
+function friendlySqlError(e) {
+  const c = connectionInfo();
+  if (e.code === "ELOGIN") return `SQL Server отказа входа на „${c.user}“. Проверете потребителя и паролата в .env и дали има достъп до базата ${c.database}.`;
+  const instance = c.server.includes("\\") && !process.env.MI_SQL_PORT;
+  if (e.code === "EINSTLOOKUP" || (instance && ["ESOCKET", "ETIMEOUT"].includes(e.code)))
+    return `Не е намерена инстанцията ${c.server}. Пуснете услугата SQL Server Browser или задайте MI_SQL_PORT в .env, и проверете дали е включен протоколът TCP/IP (SQL Server Configuration Manager).`;
+  if (e.code === "ESOCKET" || e.code === "ETIMEOUT") return `Няма връзка със SQL Server на ${c.server}. Проверете дали е включен протоколът TCP/IP (SQL Server Configuration Manager) и порта.`;
+  return `Грешка от базата: ${e.message}`;
+}
+
+let pool = null;
+async function query(text, params = {}) {
+  if (!connectionInfo().configured) throw new Error("Връзката с базата не е настроена. Попълнете MI_SQL_DATABASE, MI_SQL_USER и MI_SQL_PASSWORD в .env и рестартирайте програмата.");
   try {
-    res = await fetch(url, { headers, signal: AbortSignal.timeout(30000) });
+    pool ||= new sql.ConnectionPool(sqlConfig()).connect();
+    const req = (await pool).request();
+    for (const [k, [type, v]] of Object.entries(params)) req.input(k, type, v);
+    return (await req.query(text)).recordset;
   } catch (e) {
-    throw new Error(`Няма връзка с Microinvest на ${s.apiBase}. Проверете дали Utility Center работи с включен модул Microinvest API и отворен порт 8700.`);
+    const p = pool; pool = null; (await p?.catch(() => null))?.close().catch(() => {});
+    throw new Error(friendlySqlError(e));
   }
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Microinvest ${p} върна HTTP ${res.status}${body ? ": " + body.slice(0, 200) : ""}`);
-  }
-  const json = await res.json();
-  return { rows: Array.isArray(json) ? json : json?.data ?? [], totalPages: Number(res.headers.get("X-TotalPages")) || 1 };
 }
 
-async function miGetAll(p, params = {}) {
-  const rows = [];
-  for (let page = 1, total = 1; page <= total; page++) {
-    const r = await miGet(p, { ...params, page, page_size: 500 });
-    rows.push(...r.rows);
-    total = r.totalPages;
-  }
-  return rows;
+// Общи условия: вид операция, период (дати като "YYYY-MM-DD"), обект
+function salesFilter(from, to) {
+  const s = data.settings;
+  const params = { from: [sql.VarChar(10), from], to: [sql.VarChar(10), to], vat: [sql.Bit, s.withVat] };
+  const types = s.operationTypes.map((t, i) => { params["t" + i] = [sql.Int, t]; return "@t" + i; });
+  let where = `o.OperType IN (${types.join(", ")})
+    AND o.[Date] >= CONVERT(datetime, @from, 23) AND o.[Date] < DATEADD(day, 1, CONVERT(datetime, @to, 23))`;
+  if (s.objectId != null) { where += " AND o.ObjectID = @obj"; params.obj = [sql.Int, s.objectId]; }
+  return { where, params };
 }
+// Реалната цена на продажбата (с корекциите от панела за продажба), с или без ДДС
+const AMOUNT = "o.Qtty * (o.PriceOut + CASE WHEN @vat = 1 THEN o.VATOut ELSE 0 END)";
 
-// Номенклатура: артикули и групи (кеширани 10 минути)
-let catalog = { items: new Map(), groups: [], loadedAt: 0 };
+const source = MOCK ? null : {
+  groups: () => query("SELECT ID AS id, Code AS code, Name AS name FROM GoodsGroups"),
+
+  // [{ day, groupId, amount }]
+  salesByGroup(from, to) {
+    const { where, params } = salesFilter(from, to);
+    return query(`SELECT CONVERT(char(10), o.[Date], 23) AS day, g.GroupID AS groupId, SUM(${AMOUNT}) AS amount
+      FROM Operations o LEFT JOIN Goods g ON g.ID = o.GoodID
+      WHERE ${where}
+      GROUP BY CONVERT(char(10), o.[Date], 23), g.GroupID`, params);
+  },
+
+  // [{ goodId, name, code, groupId, doc, qtty, amount }] за един ден
+  saleLines(date) {
+    const { where, params } = salesFilter(date, date);
+    return query(`SELECT o.GoodID AS goodId, g.Name AS name, g.Code AS code, g.GroupID AS groupId, o.Acct AS doc,
+        SUM(o.Qtty) AS qtty, SUM(${AMOUNT}) AS amount
+      FROM Operations o LEFT JOIN Goods g ON g.ID = o.GoodID
+      WHERE ${where}
+      GROUP BY o.GoodID, g.Name, g.Code, g.GroupID, o.Acct`, params);
+  },
+};
+
+// Основните групи по код; подгрупите (AER…, AES…) ги наследяват
+const DEFAULT_GROUP_CODES = { AES: "service", AEU: "prima", AET: "phones", AER: "goods" };
+
+// Групи артикули (кеширани 10 минути)
+let catalog = { groups: [], loadedAt: 0 };
 async function loadCatalog(force = false) {
-  if (!force && Date.now() - catalog.loadedAt < 10 * 60 * 1000 && catalog.items.size) return catalog;
-  const [items, groups] = await Promise.all([miGetAll("/Items"), miGetAll("/ItemsGroups")]);
+  if (!force && Date.now() - catalog.loadedAt < 10 * 60 * 1000 && catalog.groups.length) return catalog;
+  const groups = await (MOCK ? mockSource : source).groups();
   catalog = {
-    items: new Map(items.map((i) => [String(i.id), { name: i.name, code: i.code, groupId: i.group_id }])),
-    groups: groups.map((g) => ({ id: g.id, code: g.code ?? "", name: g.name ?? g.Name ?? `Група ${g.id}` }))
-      .sort((a, b) => String(a.code).localeCompare(String(b.code))),
+    groups: groups.map((g) => ({ id: g.id, code: String(g.code ?? "").trim(), name: g.name || `Група ${g.id}` }))
+      .sort((a, b) => a.code.localeCompare(b.code)),
     loadedAt: Date.now(),
   };
+  // При първа връзка свързва основните групи с колоните
+  if (!MOCK && !data.groupMapSeeded) {
+    for (const g of catalog.groups) if (DEFAULT_GROUP_CODES[g.code]) data.groupMap[g.id] = DEFAULT_GROUP_CODES[g.code];
+    data.groupMapSeeded = true;
+    saveData();
+  }
   return catalog;
 }
 
@@ -136,22 +198,7 @@ function columnForGroup(groupId) {
   return data.settings.defaultRevenueColumn;
 }
 
-function lineAmount(op) {
-  const price = Number(op.price_out || 0) + (data.settings.withVat ? Number(op.vat_out || 0) : 0);
-  return Number(op.qtty || 0) * price;
-}
-
-async function fetchOperations(from, to) {
-  const s = data.settings;
-  const all = [];
-  for (const type of s.operationTypes) {
-    const rows = await miGetAll("/Operations", { operation_type: type, object_id: s.objectId, date_from: from, date_to: to });
-    all.push(...rows.filter((r) => r.operation_type == null || Number(r.operation_type) === Number(type)));
-  }
-  return all;
-}
-
-// Зарежда от Microinvest дните, които липсват в кеша или са скорошни
+// Зарежда от базата дните, които липсват в кеша или са скорошни
 async function syncRange(from, to, force) {
   const today = fmt(new Date());
   const recent = new Date(); recent.setDate(recent.getDate() - RECENT_DAYS);
@@ -160,13 +207,12 @@ async function syncRange(from, to, force) {
   if (!need.length) return;
 
   await loadCatalog(force);
-  const ops = await fetchOperations(need[0], need[need.length - 1]);
+  const rows = await (MOCK ? mockSource : source).salesByGroup(need[0], need[need.length - 1]);
   const fresh = Object.fromEntries(need.map((d) => [d, { byGroup: {}, fetchedAt: Date.now() }]));
-  for (const op of ops) {
-    const d = String(op.date || "").slice(0, 10);
-    if (!fresh[d]) continue;
-    const gid = String(catalog.items.get(String(op.good_id))?.groupId ?? "none");
-    fresh[d].byGroup[gid] = (fresh[d].byGroup[gid] || 0) + lineAmount(op);
+  for (const r of rows) {
+    if (!fresh[r.day]) continue;
+    const gid = String(r.groupId ?? "none");
+    fresh[r.day].byGroup[gid] = round2((fresh[r.day].byGroup[gid] || 0) + Number(r.amount || 0));
   }
   Object.assign(data.cache, fresh);
   saveData();
@@ -304,8 +350,7 @@ const handlers = {
     refreshFloat();
     let groups = catalog.groups, catalogError = null;
     try { groups = (await loadCatalog()).groups; } catch (e) { catalogError = e.message; }
-    const { apiKey, ...settings } = data.settings;
-    return { settings: { ...settings, hasApiKey: !!apiKey }, revenueColumns: data.revenueColumns, expenseColumns: data.expenseColumns,
+    return { settings: data.settings, connection: connectionInfo(), revenueColumns: data.revenueColumns, expenseColumns: data.expenseColumns,
       groupMap: data.groupMap, groups, mappedColumns: mappedColumns(), catalogError, mock: MOCK,
       isAdmin: isAdmin(), float: floatStatus() };
   },
@@ -324,17 +369,14 @@ const handlers = {
     const date = q.get("date"), col = q.get("col");
     if (!isDate(date)) throw new Error("Невалидна дата");
     await loadCatalog();
-    const ops = await fetchOperations(date, date);
     const byItem = new Map();
-    for (const op of ops) {
-      if (String(op.date || "").slice(0, 10) !== date) continue;
-      const item = catalog.items.get(String(op.good_id));
-      if (columnForGroup(String(item?.groupId ?? "none")) !== col) continue;
-      const key = String(op.good_id);
-      const row = byItem.get(key) || { name: item?.name ?? `Артикул ${key}`, code: item?.code ?? "", qtty: 0, amount: 0, docs: new Set() };
-      row.qtty += Number(op.qtty || 0);
-      row.amount += lineAmount(op);
-      if (op.document_number) row.docs.add(op.document_number);
+    for (const r of await (MOCK ? mockSource : source).saleLines(date)) {
+      if (columnForGroup(String(r.groupId ?? "none")) !== col) continue;
+      const key = String(r.goodId);
+      const row = byItem.get(key) || { name: r.name ?? `Артикул ${key}`, code: r.code ?? "", qtty: 0, amount: 0, docs: new Set() };
+      row.qtty += Number(r.qtty || 0);
+      row.amount += Number(r.amount || 0);
+      if (r.doc != null) row.docs.add(r.doc);
       byItem.set(key, row);
     }
     const lines = [...byItem.values()].map((r) => ({ ...r, qtty: round2(r.qtty), amount: round2(r.amount), docs: [...r.docs] }))
@@ -428,10 +470,11 @@ const handlers = {
 
   "POST /api/settings": async (_, b) => {
     const s = data.settings;
-    const connChanged = (b.apiBase !== undefined && b.apiBase !== s.apiBase) || b.apiKey !== undefined || b.objectId !== undefined;
-    if (b.apiBase !== undefined) s.apiBase = String(b.apiBase).trim();
-    if (b.apiKey !== undefined) s.apiKey = String(b.apiKey).trim();
-    if (b.objectId !== undefined) s.objectId = b.objectId === "" || b.objectId === null ? null : Number(b.objectId);
+    if (b.objectId !== undefined) {
+      const obj = b.objectId === "" || b.objectId === null ? null : Number(b.objectId);
+      if (obj !== null && !Number.isInteger(obj)) throw new Error("Обектът трябва да е число (ID)");
+      if (obj !== s.objectId) { s.objectId = obj; data.cache = {}; }
+    }
     if (b.withVat !== undefined && b.withVat !== s.withVat) { s.withVat = !!b.withVat; data.cache = {}; }
     if (b.operationTypes !== undefined) {
       const t = String(b.operationTypes).split(/[ ,;]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0);
@@ -440,7 +483,6 @@ const handlers = {
       s.operationTypes = t;
     }
     if (b.defaultRevenueColumn !== undefined) s.defaultRevenueColumn = b.defaultRevenueColumn;
-    if (connChanged) { data.cache = {}; catalog.loadedAt = 0; }
     saveData();
     return { ok: true };
   },
@@ -479,42 +521,43 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Отчет: http://localhost:${PORT}`);
-  console.log(MOCK ? "Демо режим с примерни данни" : `Microinvest: ${data.settings.apiBase}`);
+  const c = connectionInfo();
+  console.log(MOCK ? "Демо режим с примерни данни" : c.configured ? `Microinvest: ${c.server}, база ${c.database}, потребител ${c.user}`
+    : "Внимание: връзката с базата не е настроена (вижте .env.example)");
   console.log(`Данните се пазят в ${DATA_FILE}`);
 });
 
 // ---------------------------------------------------------------- Демо данни
-function mockGet(p, params) {
-  const groups = [
-    { id: 1, code: "001", name: "Телефони" }, { id: 2, code: "002", name: "Аксесоари" },
-    { id: 5, code: "002001", name: "Кабели и зарядни" }, { id: 3, code: "003", name: "Прима карти" },
-    { id: 4, code: "004", name: "Сервизни услуги" },
-  ];
-  const items = [
-    [1, "Samsung Galaxy A55", 1, 649], [2, "iPhone 15 128GB", 1, 1599], [3, "Redmi Note 13", 1, 389],
-    [4, "Калъф силикон", 2, 15], [5, "Протектор стъкло", 2, 20], [6, "USB-C кабел 1м", 5, 12.9],
-    [7, "Зарядно 20W", 5, 29], [8, "Прима карта 10", 3, 10], [9, "Прима карта 20", 3, 20],
-    [10, "Смяна на дисплей", 4, 180], [11, "Смяна на батерия", 4, 70], [12, "Диагностика", 4, 15],
-  ].map(([id, name, group_id, price]) => ({ id, code: String(100 + id), name, group_id, price }));
+const MOCK_GROUPS = [
+  { id: 1, code: "001", name: "Телефони" }, { id: 2, code: "002", name: "Аксесоари" },
+  { id: 5, code: "002001", name: "Кабели и зарядни" }, { id: 3, code: "003", name: "Прима карти" },
+  { id: 4, code: "004", name: "Сервизни услуги" },
+];
+const MOCK_ITEMS = [
+  [1, "Samsung Galaxy A55", 1, 649], [2, "iPhone 15 128GB", 1, 1599], [3, "Redmi Note 13", 1, 389],
+  [4, "Калъф силикон", 2, 15], [5, "Протектор стъкло", 2, 20], [6, "USB-C кабел 1м", 5, 12.9],
+  [7, "Зарядно 20W", 5, 29], [8, "Прима карта 10", 3, 10], [9, "Прима карта 20", 3, 20],
+  [10, "Смяна на дисплей", 4, 180], [11, "Смяна на батерия", 4, 70], [12, "Диагностика", 4, 15],
+].map(([id, name, groupId, price]) => ({ id, code: String(100 + id), name, groupId, price }));
 
-  if (p === "/ItemsGroups") return { rows: groups, totalPages: 1 };
-  if (p === "/Items") return { rows: items, totalPages: 1 };
-  if (p === "/Operations") {
-    const rows = [];
-    let doc = 1;
-    for (const date of daysBetween(params.date_from, params.date_to)) {
-      let seed = Number(date.replace(/-/g, ""));
-      const rnd = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
-      const n = parse(date).getDay() === 0 ? 3 : 8 + Math.floor(rnd() * 10);
-      for (let i = 0; i < n; i++) {
-        const it = items[Math.floor(rnd() * items.length)];
-        if (it.group_id === 1 && rnd() > 0.3) continue;
-        const gross = it.price;
-        rows.push({ operation_type: 2, document_number: doc++, good_id: String(it.id), qtty: 1 + Math.floor(rnd() * (it.price < 30 ? 3 : 1)),
-          price_out: round2(gross / 1.2), vat_out: round2(gross - gross / 1.2), date: date + "T00:00:00" });
-      }
-    }
-    return { rows, totalPages: 1 };
+// Псевдослучайни продажби, еднакви за дадена дата
+function mockLines(date) {
+  let seed = Number(date.replace(/-/g, "")), doc = seed % 1000 * 100;
+  const rnd = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
+  const lines = [];
+  const n = parse(date).getDay() === 0 ? 3 : 8 + Math.floor(rnd() * 10);
+  for (let i = 0; i < n; i++) {
+    const it = MOCK_ITEMS[Math.floor(rnd() * MOCK_ITEMS.length)];
+    if (it.groupId === 1 && rnd() > 0.3) continue;
+    const qtty = 1 + Math.floor(rnd() * (it.price < 30 ? 3 : 1));
+    const price = data.settings.withVat ? it.price : round2(it.price / 1.2);
+    lines.push({ goodId: it.id, name: it.name, code: it.code, groupId: it.groupId, doc: doc++, qtty, amount: qtty * price });
   }
-  return { rows: [], totalPages: 1 };
+  return lines;
 }
+
+const mockSource = {
+  groups: async () => MOCK_GROUPS,
+  salesByGroup: async (from, to) => daysBetween(from, to).flatMap((day) => mockLines(day).map((l) => ({ day, groupId: l.groupId, amount: l.amount }))),
+  saleLines: async (date) => mockLines(date),
+};

@@ -2,11 +2,16 @@
   "name": "microinvest-otchet",
   "version": "1.0.0",
   "private": true,
-  "description": "Отчет приходи, разходи и оборот с данни от Microinvest Склад Про",
+  "description": "Отчет приходи и разходи с данни от базата на Microinvest Склад Про",
   "main": "server.js",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=20.12"
+  },
   "scripts": {
     "start": "node server.js",
     "demo": "node -e \"process.env.MOCK='1';require('./server.js')\""
+  },
+  "dependencies": {
+    "mssql": "^11.0.2"
   }
 }
