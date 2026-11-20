@@ -657,16 +657,14 @@ function settingsView() {
   const groups = S.meta.groups || [];
   const level = (g) => Math.max(0, Math.floor(String(g.code || "").length / 3) - 1);
   return `<div class="settings">
-    <h3>Връзка с Microinvest Склад Про</h3>
-    <p class="help">В Microinvest Utility Center трябва да е включен модулът Microinvest API, а порт 8700 да е отворен в защитната стена.</p>
+    <h3>Връзка с базата на Microinvest Склад Про</h3>
+    ${connHelp(S.meta.connection)}
     <div class="form">
-      <label for="sUrl">Адрес на API</label><input class="field" id="sUrl" value="${esc(s.apiBase)}">
-      <label for="sKey">API ключ</label><input class="field" id="sKey" type="password" placeholder="${s.hasApiKey ? "запазен — въведете нов, за да го смените" : "без ключ"}">
       <label for="sObj">Обект (ID)</label><input class="field" id="sObj" value="${s.objectId ?? ""}" placeholder="празно = всички обекти">
       <label for="sTypes">Типове операции</label><input class="field" id="sTypes" value="${s.operationTypes.join(", ")}" title="2 = Продажба">
       <label for="sVat">Суми</label><label><input type="checkbox" id="sVat" ${s.withVat ? "checked" : ""}> с ДДС</label>
     </div>
-    <div class="actions" style="justify-content:flex-start"><button class="primary" id="saveConn">Запази и провери връзката</button><span id="connMsg" class="muted"></span></div>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" id="saveConn">Запази и провери</button><span id="connMsg" class="muted"></span></div>
 
     <h3>Групи артикули → колони в Приходи</h3>
     <p class="help">Всяка продажба отива в колоната на групата на артикула. Подгрупите наследяват колоната на родителската група. Продажбите от групи без избрана колона отиват в:
@@ -683,9 +681,17 @@ function settingsView() {
     <div class="row"><span class="muted" style="width:80px">Разходи</span><div class="collist">${expCols().map((c) => `<button data-colmenu="expense|${c.id}">${esc(c.name)}</button>`).join("")}<button data-addcol="expense">+ Колона</button></div></div>
 
     <h3>Данни от Microinvest</h3>
-    <p class="help">Продажбите се пазят локално след първото зареждане, а последните 3 дни се обновяват всеки път. Ако сте коригирали стари документи в Microinvest, изтеглете всичко наново.</p>
+    <p class="help">Продажбите се пазят локално след първото зареждане, а последните 3 дни се четат наново всеки път. Ако сте коригирали стари документи в Microinvest, изтеглете всичко наново.</p>
     <button class="ghost" id="clearCache">Изтегли всичко наново</button>
   </div>`;
+}
+
+// Потребителят и паролата за базата са само в .env на сървъра — не се виждат и не се сменят оттук
+function connHelp(c) {
+  if (!c || c.mock) return `<p class="help">Демо режим: продажбите са примерни и не се четат от база.</p>`;
+  if (!c.configured) return `<p class="err">Връзката с базата не е настроена. Попълнете файла .env до server.js (вижте .env.example) и рестартирайте програмата.</p>`;
+  return `<p class="help">Сървър <strong>${esc(c.server)}</strong>, база <strong>${esc(c.database)}</strong>, потребител <strong>${esc(c.user)}</strong> (само за четене).
+    Тези данни се сменят във файла .env на сървъра.</p>`;
 }
 
 document.addEventListener("click", async (e) => {
@@ -693,9 +699,7 @@ document.addEventListener("click", async (e) => {
     const msg = $("#connMsg");
     msg.textContent = "Проверка…"; msg.className = "muted";
     try {
-      const body = { apiBase: $("#sUrl").value, objectId: $("#sObj").value, operationTypes: $("#sTypes").value, withVat: $("#sVat").checked };
-      if ($("#sKey").value) body.apiKey = $("#sKey").value;
-      await api("/api/settings", body);
+      await api("/api/settings", { objectId: $("#sObj").value, operationTypes: $("#sTypes").value, withVat: $("#sVat").checked });
       await refreshMeta();
       if (S.meta.catalogError) throw new Error(S.meta.catalogError);
       render();
