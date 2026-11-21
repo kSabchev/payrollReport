@@ -5,6 +5,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 try { process.loadEnvFile(path.join(__dirname, ".env")); } catch {}
 
@@ -17,9 +18,8 @@ const BACKUP_DIR = path.join(__dirname, "backups");
 const BACKUP_KEEP_DAYS = 30;
 const RECENT_DAYS = 3; // последните N дни винаги се презареждат от базата
 
-// Администратори: акаунти в Tailscale (имейл), разделени със запетая. Празно = без вход.
-const ADMINS = String(process.env.ADMINS || "").split(/[\s,;]+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
-const AUTH = ADMINS.length > 0;
+// Вход с име и парола. В демо режим е изключен, освен ако DEMO_LOGIN=1.
+const AUTH = !MOCK || process.env.DEMO_LOGIN === "1";
 
 // ---------------------------------------------------------------- Данни
 const DEFAULT_DATA = {
@@ -52,6 +52,8 @@ const DEFAULT_DATA = {
   cache: {},           // "YYYY-MM-DD" -> { byGroup: { групаId: сума }, fetchedAt }
   float: [],           // нулирания на оборотните пари, по дата: [{ date, amount, at }]
   floatBalance: {},    // "YYYY-MM-DD" -> оборотни − разходи в края на деня
+  users: [],           // акаунти (всички са администратори): [{ username, salt, hash, createdAt, lastLogin }]
+  sessions: {},        // sha256(ключ от бисквитката) -> { username, created, expires }
 };
 
 let data = loadData();
@@ -160,27 +162,84 @@ function readHistory(from, to, kind, limit = 2000) {
   return { entries: out, truncated: false };
 }
 
-// ---------------------------------------------------------------- Вход през Tailscale
-// tailscale serve добавя към заявката Tailscale-User-Login (имейл) и Tailscale-User-Name.
-// На тях се вярва само ако заявката идва от същия компютър (от tailscale serve), иначе всеки
-// би могъл да ги подправи. Затова в .env трябва да е HOST=127.0.0.1.
-const isLoopback = (a) => a === "127.0.0.1" || a === "::1" || a === "::ffff:127.0.0.1";
+// ---------------------------------------------------------------- Акаунти и вход
+// Всички акаунти са администратори. Паролите се пазят само като scrypt хеш със сол.
+// След вход браузърът получава бисквитка (HttpOnly, SameSite=Strict) със случаен ключ;
+// в data.json се пази само SHA-256 на ключа. Сесията важи 30 дни.
+const SESSION_DAYS = 30;
+const COOKIE = "payroll_session";
+const MAX_FAILS = 5, LOCK_MINUTES = 5;
+const fails = new Map(); // потребител -> { count, until }
 
-// Имената с кирилица идват кодирани като =?utf-8?q?...?= (RFC 2047)
-function decodeHeader(v) {
-  return String(v || "").replace(/=\?utf-8\?([qb])\?([^?]*)\?=\s*/gi, (_, enc, t) => (enc.toLowerCase() === "b"
-    ? Buffer.from(t, "base64")
-    : Buffer.from(t.replace(/_/g, " ").replace(/=([0-9a-f]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16))), "latin1")).toString("utf8"));
+const normUser = (s) => String(s || "").trim().toLowerCase();
+const tokenId = (t) => crypto.createHash("sha256").update(t).digest("hex");
+const findUser = (name) => data.users.find((u) => u.username === normUser(name));
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  return { salt, hash: crypto.scryptSync(password, salt, 64).toString("hex") };
 }
 
-// { login, name, admin } или null, ако не е влязъл през Tailscale
+function passwordOk(user, password) {
+  const h = crypto.scryptSync(String(password || ""), user.salt, 64);
+  return crypto.timingSafeEqual(h, Buffer.from(user.hash, "hex"));
+}
+
+function checkNewUser(username, password) {
+  const u = normUser(username);
+  if (!/^[\p{L}\p{N}._-]{2,32}$/u.test(u)) throw new Error("Името трябва да е от 2 до 32 букви, цифри, точка, тире или долна черта, без интервали");
+  checkPassword(password);
+  return u;
+}
+
+function checkPassword(password) {
+  if (String(password || "").length < 8) throw new Error("Паролата трябва да е поне 8 знака");
+}
+
+function parseCookies(req) {
+  const out = {};
+  for (const part of String(req.headers.cookie || "").split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+
+function setSessionCookie(req, res, token, maxAge) {
+  const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
+  res.setHeader("Set-Cookie", `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secure}`);
+}
+
+function startSession(req, res, user) {
+  const now = Date.now();
+  for (const [id, s] of Object.entries(data.sessions)) if (s.expires < now) delete data.sessions[id];
+  const token = crypto.randomBytes(32).toString("base64url");
+  data.sessions[tokenId(token)] = { username: user.username, created: now, expires: now + SESSION_DAYS * 864e5 };
+  user.lastLogin = new Date(now).toISOString();
+  saveData();
+  setSessionCookie(req, res, token, SESSION_DAYS * 86400);
+}
+
+function sessionOf(req) {
+  const t = parseCookies(req)[COOKIE];
+  if (!t) return null;
+  const id = tokenId(t), s = data.sessions[id];
+  return s && s.expires > Date.now() ? { id, ...s } : null;
+}
+
+// { login, name, sessionId } или null
 function userOf(req) {
   if (!AUTH) return null;
-  if (!isLoopback(req.socket.remoteAddress)) return null;
-  const login = String(req.headers["tailscale-user-login"] || "").trim().toLowerCase();
-  if (!login) return null;
-  return { login, name: decodeHeader(req.headers["tailscale-user-name"]) || login, admin: ADMINS.includes(login) };
+  const s = sessionOf(req);
+  const u = s && findUser(s.username);
+  return u ? { login: u.username, name: u.username, sessionId: s.id } : null;
 }
+
+const dropSessions = (username, keepId) => {
+  for (const [id, s] of Object.entries(data.sessions)) if (s.username === username && id !== keepId) delete data.sessions[id];
+};
+
+const usersList = () => data.users.map(({ username, createdAt, lastLogin }) => ({ username, createdAt, lastLogin }));
 
 // ---------------------------------------------------------------- База на Microinvest
 // Чете се само от Operations, Goods и GoodsGroups. Продажбите се сумират в базата по ден и група.
@@ -490,7 +549,7 @@ const handlers = {
     return { settings: data.settings, connection: connectionInfo(), revenueColumns: data.revenueColumns, expenseColumns: data.expenseColumns,
       groupMap: data.groupMap, groups, mappedColumns: mappedColumns(), catalogError, mock: MOCK,
       isAdmin: true, // до приложението стигат само администратори
-      auth: { enabled: AUTH, user: user && { login: user.login, name: user.name }, admins: AUTH ? ADMINS : [] },
+      auth: { enabled: AUTH, user: user && { name: user.name }, users: AUTH ? usersList() : [] },
       backup: backupStatus(), float: floatStatus() };
   },
 
@@ -686,31 +745,89 @@ const handlers = {
   },
 };
 
-function deny(res, isApi, user) {
-  const msg = user
-    ? `Акаунтът ${user.login} няма достъп. Помолете администратор да го добави в ADMINS във файла .env.`
-    : "Влезте през адреса в Tailscale. Програмата не приема директни заявки, когато е включен входът.";
-  if (isApi) return send(res, 403, { error: msg });
-  res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
-  res.end(`<!doctype html><meta charset="utf-8"><title>Нямате достъп</title>
-<body style="font:15px system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 16px">
-<h1 style="font-size:20px">Нямате достъп</h1><p>${msg.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))}</p></body>`);
-}
+// Достъпни без вход: проверка на сесията, вход, първи акаунт, изход
+const publicHandlers = {
+  "GET /api/session": async (_, __, user) => ({ auth: AUTH, user: user && { name: user.name }, setup: AUTH && !data.users.length }),
+
+  "POST /api/login": async (_, b, __, req, res) => {
+    const name = normUser(b.username), f = fails.get(name), now = Date.now();
+    if (f?.until > now) throw new Error(`Твърде много грешни опити. Опитайте отново след ${Math.ceil((f.until - now) / 60000)} мин.`);
+    const user = findUser(name);
+    if (!user || !passwordOk(user, b.password)) {
+      const count = (f && !f.until ? f.count : 0) + 1; // след изтекло заключване броенето започва отначало
+      if (fails.size > 1000) fails.clear();
+      fails.set(name, count >= MAX_FAILS ? { count: 0, until: now + LOCK_MINUTES * 60000 } : { count, until: 0 });
+      logHistory({ kind: "change", action: "login-failed", text: `Неуспешен вход с име „${name}“` });
+      throw new Error("Грешно име или парола");
+    }
+    fails.delete(name);
+    startSession(req, res, user);
+    audit({ login: user.username, name: user.username }, "login", "Вход");
+    return { ok: true };
+  },
+
+  // Първият акаунт се създава от страницата, само докато няма нито един
+  "POST /api/setup": async (_, b, __, req, res) => {
+    if (!AUTH || data.users.length) throw new Error("Вече има създаден акаунт");
+    const username = checkNewUser(b.username, b.password);
+    const user = { username, ...hashPassword(b.password), createdAt: new Date().toISOString() };
+    data.users.push(user);
+    startSession(req, res, user);
+    audit({ login: username, name: username }, "users", `Създаден първи акаунт „${username}“`);
+    return { ok: true };
+  },
+
+  "POST /api/logout": async (_, __, user, req, res) => {
+    const s = sessionOf(req);
+    if (s) { delete data.sessions[s.id]; saveData(); }
+    setSessionCookie(req, res, "", 0);
+    if (user) audit(user, "logout", "Изход");
+    return { ok: true };
+  },
+};
+
+// Акаунти: добавяне, смяна на парола, изтриване
+handlers["POST /api/users"] = async (_, b, user) => {
+  if (!AUTH) throw new Error("В демо режим няма акаунти");
+  if (b.action === "add") {
+    const username = checkNewUser(b.username, b.password);
+    if (findUser(username)) throw new Error(`Вече има акаунт „${username}“`);
+    data.users.push({ username, ...hashPassword(b.password), createdAt: new Date().toISOString() });
+    saveData();
+    audit(user, "users", `Нов акаунт „${username}“`);
+  } else if (b.action === "password") {
+    const target = findUser(b.username);
+    if (!target) throw new Error("Няма такъв акаунт");
+    checkPassword(b.password);
+    Object.assign(target, hashPassword(b.password));
+    dropSessions(target.username, user.sessionId); // излиза от другите устройства
+    saveData();
+    audit(user, "users", target.username === user.login ? "Смяна на собствената парола" : `Смяна на паролата на „${target.username}“`);
+  } else if (b.action === "delete") {
+    const target = findUser(b.username);
+    if (!target) throw new Error("Няма такъв акаунт");
+    if (target.username === user.login) throw new Error("Не можете да изтриете собствения си акаунт");
+    data.users = data.users.filter((u) => u !== target);
+    dropSessions(target.username);
+    saveData();
+    audit(user, "users", `Изтрит акаунт „${target.username}“`);
+  } else throw new Error("Невалидно действие");
+  return { ok: true, users: usersList() };
+};
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
-  const isApi = url.pathname.startsWith("/api/");
+  const key = `${req.method} ${url.pathname}`;
   const user = userOf(req);
-  if (AUTH && !user?.admin) return deny(res, isApi, user);
-
-  const h = handlers[`${req.method} ${url.pathname}`];
+  const h = publicHandlers[key] || handlers[key];
   if (h) {
     try {
-      // Само JSON: така чужда страница не може да прати заявка от браузъра на администратора (CSRF)
+      if (AUTH && !user && !publicHandlers[key]) return send(res, 401, { error: "Влезте отново", login: true });
+      // Само JSON: така чужда страница не може да прати заявка от браузъра на влязъл потребител (CSRF)
       if (req.method === "POST" && !String(req.headers["content-type"] || "").startsWith("application/json"))
         return send(res, 415, { error: "Очаква се JSON" });
       const body = req.method === "POST" ? await readBody(req) : null;
-      send(res, 200, await h(url.searchParams, body, user));
+      send(res, 200, await h(url.searchParams, body, user, req, res));
     } catch (e) {
       send(res, 400, { error: e.message });
     }
@@ -739,11 +856,8 @@ server.listen(PORT, HOST, () => {
   console.log(MOCK ? "Демо режим с примерни данни" : c.configured ? `Microinvest: ${c.server}, база ${c.database}, потребител ${c.user}`
     : "Внимание: връзката с базата не е настроена (вижте .env.example)");
   console.log(`Данните се пазят в ${DATA_FILE}`);
-  if (AUTH) {
-    console.log(`Вход през Tailscale. Администратори: ${ADMINS.join(", ")}`);
-    if (!HOST || !isLoopback(HOST === "localhost" ? "127.0.0.1" : HOST))
-      console.log("Препоръка: задайте HOST=127.0.0.1 в .env. Заявките, които не идват от tailscale serve на този компютър, се отказват.");
-  } else if (!MOCK) console.log("Внимание: ADMINS не е зададен в .env — всеки, който стигне до програмата, може да я променя.");
+  if (AUTH) console.log(data.users.length ? `Акаунти: ${data.users.map((u) => u.username).join(", ")}`
+    : "Няма акаунти. Отворете програмата в браузъра и създайте първия.");
 });
 
 // ---------------------------------------------------------------- Демо данни

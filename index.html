@@ -145,6 +145,15 @@
   .history-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 12px; background: var(--surface);
     border: 1px solid var(--line); border-top: 0; }
   .history-bar + .tablewrap { border-top: 0; }
+
+  /* Вход */
+  .authbox { max-width: 360px; margin: 14vh auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 22px 24px; }
+  .authbox h1 { font-size: 19px; margin: 0 0 4px; }
+  .authbox label { display: block; color: var(--muted); margin: 12px 0 4px; }
+  .authbox .field { width: 100%; }
+  .authbox .primary { width: 100%; margin-top: 18px; }
+  .who button.link { border: 0; background: none; padding: 0 0 0 8px; color: var(--accent); }
+  .who button.link:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -170,7 +179,7 @@
       <button data-group="day">По дни</button><button data-group="month">По месеци</button>
     </div>
     <span class="spacer"></span>
-    <span class="who" id="who"></span>
+    <span class="who"><span id="who"></span><button class="link" id="logout" hidden>Изход</button></span>
   </div>
 
   <div class="summary">
@@ -190,6 +199,8 @@
   </div>
   <div id="view"></div>
 </main>
+
+<div id="auth" hidden></div>
 
 <dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
 
@@ -213,6 +224,7 @@ const toNum = (v) => { const s = String(v ?? "").trim().replace(/\s/g, "").repla
 async function api(path, body) {
   const r = await fetch(path.replace(/^\//, ""), body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
   const j = await r.json().catch(() => ({ error: "Невалиден отговор от сървъра" }));
+  if (r.status === 401 && j.login) showAuth(false); // сесията е изтекла
   if (!r.ok) throw new Error(j.error || "Грешка");
   return j;
 }
@@ -278,7 +290,11 @@ const sum = (days, f) => days.reduce((s, d) => s + f(d), 0);
 
 // ------------------------------------------------------------ Зареждане
 async function init() {
-  try { S.meta = await api("/api/state"); }
+  try {
+    const sess = await api("/api/session");
+    if (sess.auth && !sess.user) return showAuth(sess.setup);
+    S.meta = await api("/api/state");
+  }
   catch (e) { $("#view").innerHTML = `<div class="notice">${esc(e.message)}</div>`; return; }
   bindChrome();
   load();
@@ -311,7 +327,7 @@ function updateChrome() {
   $("#editCols").hidden = S.tab === "settings" || S.tab === "history";
   const u = S.meta.auth?.user;
   $("#who").textContent = u ? u.name : "";
-  $("#who").title = u ? u.login : "";
+  $("#logout").hidden = !u;
   $("#editCols").setAttribute("aria-pressed", S.editCols);
   $("#editCols").textContent = S.editCols ? "Готово" : "Редактирай колони";
   $("#syncInfo").textContent = S.loading ? "Зареждане…" : S.loadedAt ? `Обновено ${S.loadedAt.toLocaleTimeString("bg-BG", { hour: "2-digit", minute: "2-digit" })}${S.meta.mock ? " · демо данни" : ""}` : "";
@@ -343,6 +359,7 @@ function bindChrome() {
   $("#toPick").onchange = pickRange;
   $("#editCols").onclick = () => { S.editCols = !S.editCols; render(); };
   $("#refresh").onclick = () => load(true);
+  $("#logout").onclick = async () => { await api("/api/logout", {}).catch(() => {}); location.reload(); };
   document.querySelector(".tabs").onclick = (e) => { const b = e.target.closest("[role=tab]"); if (!b) return; S.tab = b.dataset.tab; render(); };
 }
 
@@ -709,14 +726,70 @@ function histRow(e) {
   return `<tr><td class="time">${time}</td><td class="user">${user}</td><td>${what}</td></tr>`;
 }
 
+// ------------------------------------------------------------ Вход и акаунти
+// setup = още няма акаунти: създава се първият
+function showAuth(setup) {
+  if (dlg.open) dlg.close();
+  document.querySelector("main").hidden = true;
+  const box = $("#auth");
+  box.hidden = false;
+  box.innerHTML = `<form class="authbox" id="authForm">
+    <h1>${setup ? "Първи акаунт" : "Вход"}</h1>
+    ${setup ? `<p class="muted" style="margin:0">Още няма акаунти. Създайте администратор; другите акаунти се добавят после от Настройки.</p>` : ""}
+    <label for="aUser">Име</label><input class="field" id="aUser" autocomplete="username" autocapitalize="none" required>
+    <label for="aPass">Парола</label><input class="field" id="aPass" type="password" autocomplete="${setup ? "new-password" : "current-password"}" required>
+    ${setup ? `<label for="aPass2">Паролата отново</label><input class="field" id="aPass2" type="password" autocomplete="new-password" required>` : ""}
+    <p class="err" id="aErr" style="margin:10px 0 0"></p>
+    <button class="primary">${setup ? "Създай и влез" : "Влез"}</button>
+  </form>`;
+  $("#aUser").focus();
+  $("#authForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const username = $("#aUser").value, password = $("#aPass").value;
+    if (setup && password !== $("#aPass2").value) { $("#aErr").textContent = "Паролите не съвпадат"; return; }
+    try { await api(setup ? "/api/setup" : "/api/login", { username, password }); location.reload(); }
+    catch (err) { $("#aErr").textContent = err.message; $("#aPass").select(); }
+  };
+}
+
+function usersView(a) {
+  const when = (s) => (s ? new Date(s).toLocaleString("bg-BG", { dateStyle: "short", timeStyle: "short" }) : "—");
+  return `<p class="help">Всички акаунти са администратори. Влезли сте като <strong>${esc(a.user?.name)}</strong>.</p>
+    <table class="maptable"><thead><tr><th>Име</th><th>Създаден</th><th>Последен вход</th><th></th></tr></thead><tbody>
+    ${a.users.map((u) => `<tr><td>${esc(u.username)}${u.username === a.user?.name ? ` <span class="muted">(вие)</span>` : ""}</td>
+      <td class="muted">${when(u.createdAt)}</td><td class="muted">${when(u.lastLogin)}</td>
+      <td><button class="ghost" data-userpw="${esc(u.username)}">Смени паролата</button>
+        ${u.username === a.user?.name ? "" : `<button class="ghost" data-userdel="${esc(u.username)}">Изтрий</button>`}</td></tr>`).join("")}
+    </tbody></table>
+    <div class="actions" style="justify-content:flex-start;margin-top:8px"><button class="ghost" id="addUser">+ Нов акаунт</button></div>`;
+}
+
+// Без име — нов акаунт; с име — нова парола за този акаунт
+function openUser(username) {
+  const isNew = !username;
+  showDialog(`<h2>${isNew ? "Нов акаунт" : `Нова парола за „${esc(username)}“`}</h2>
+    <p class="sub">${isNew ? "Новият акаунт също е администратор." : "Акаунтът ще излезе от другите си устройства."}</p>
+    ${isNew ? `<div class="row"><input class="field" id="uName" placeholder="Име" autocomplete="off" autocapitalize="none"></div>` : ""}
+    <div class="row"><input class="field" id="uPass" type="password" placeholder="Парола (поне 8 знака)" autocomplete="new-password"></div>
+    <div class="row"><input class="field" id="uPass2" type="password" placeholder="Паролата отново" autocomplete="new-password"></div>
+    <div class="actions"><button class="ghost" id="cancel">Отказ</button><button class="primary" id="ok">${isNew ? "Създай" : "Запази"}</button></div>`, (root) => {
+    $("#cancel", root).onclick = closeDialog;
+    $("#ok", root).onclick = async () => {
+      const password = $("#uPass", root).value;
+      if (password !== $("#uPass2", root).value) return alert("Паролите не съвпадат");
+      try {
+        const r = await api("/api/users", isNew ? { action: "add", username: $("#uName", root).value, password } : { action: "password", username, password });
+        S.meta.auth.users = r.users; closeDialog(); render();
+      } catch (err) { alert(err.message); }
+    };
+  });
+  setTimeout(() => $(isNew ? "#uName" : "#uPass")?.focus(), 0);
+}
+
 // ------------------------------------------------------------ Настройки
 function accessHelp() {
   const a = S.meta.auth, b = S.meta.backup;
-  const access = !a?.enabled
-    ? (S.meta.mock ? `<p class="help">Демо режим: няма вход.</p>`
-      : `<p class="err">Входът не е включен: всеки, който стигне до програмата, може да я променя. Добавете ADMINS във файла .env (вижте README) и рестартирайте програмата.</p>`)
-    : `<p class="help">Влезли сте като <strong>${esc(a.user?.name)}</strong> (${esc(a.user?.login)}). Администратори: ${a.admins.map(esc).join(", ")}.
-      Списъкът се сменя в ADMINS във файла .env на сървъра.</p>`;
+  const access = !a?.enabled ? `<p class="help">Демо режим: няма вход.</p>` : usersView(a);
   let backup = "";
   if (b && !b.mock) {
     const when = b.at ? new Date(b.at).toLocaleString("bg-BG") : null;
@@ -725,7 +798,7 @@ function accessHelp() {
       ${b.error ? `<p class="err">Последното копие не е направено: ${esc(b.error)}</p>` : ""}
       <div class="actions" style="justify-content:flex-start;margin-top:0"><button class="ghost" id="backupNow">Направи копие сега</button><span id="backupMsg" class="muted"></span></div>`;
   }
-  return `<h3>Достъп и резервни копия</h3>${access}${backup}`;
+  return `<h3>Акаунти</h3>${access}<h3>Резервни копия</h3>${backup || `<p class="help">В демо режим не се правят копия.</p>`}`;
 }
 
 function settingsView() {
@@ -786,6 +859,14 @@ document.addEventListener("click", async (e) => {
       $("#connMsg").textContent = `Връзката работи. Групи: ${S.meta.groups.length}.`;
       load();
     } catch (err) { render(); $("#connMsg").textContent = err.message; $("#connMsg").className = "err"; }
+  }
+  if (e.target.id === "addUser") openUser();
+  if (e.target.dataset?.userpw) openUser(e.target.dataset.userpw);
+  if (e.target.dataset?.userdel) {
+    const name = e.target.dataset.userdel;
+    if (!confirm(`Да изтрия ли акаунта „${name}“?`)) return;
+    try { const r = await api("/api/users", { action: "delete", username: name }); S.meta.auth.users = r.users; render(); }
+    catch (err) { alert(err.message); }
   }
   if (e.target.id === "backupNow") {
     try { const r = await api("/api/backup", {}); S.meta.backup = r.backup; render(); $("#backupMsg").textContent = "Копието е направено."; }
