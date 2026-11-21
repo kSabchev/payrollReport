@@ -135,6 +135,25 @@
   .maptable select { border: 1px solid var(--line); background: var(--input); border-radius: 6px; padding: 5px 8px; }
   .collist { display: flex; flex-wrap: wrap; gap: 6px; }
   .collist button { border: 1px solid var(--line); background: var(--input); border-radius: 6px; padding: 5px 10px; }
+
+  /* История */
+  .who { color: var(--muted); font-size: 13px; }
+  .history td, .history th { text-align: left; white-space: normal; padding: 7px 10px; vertical-align: top; }
+  .history td.time { white-space: nowrap; color: var(--muted); min-width: 0; }
+  .history td.user { white-space: nowrap; min-width: 0; }
+  .history .tag { display: inline-block; font-size: 11px; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; margin-right: 6px; color: var(--muted); }
+  .history-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 12px; background: var(--surface);
+    border: 1px solid var(--line); border-top: 0; }
+  .history-bar + .tablewrap { border-top: 0; }
+
+  /* Вход */
+  .authbox { max-width: 360px; margin: 14vh auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 22px 24px; }
+  .authbox h1 { font-size: 19px; margin: 0 0 4px; }
+  .authbox label { display: block; color: var(--muted); margin: 12px 0 4px; }
+  .authbox .field { width: 100%; }
+  .authbox .primary { width: 100%; margin-top: 18px; }
+  .who button.link { border: 0; background: none; padding: 0 0 0 8px; color: var(--accent); }
+  .who button.link:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -159,6 +178,8 @@
     <div class="seg" id="grouping" role="group" aria-label="Редове" hidden>
       <button data-group="day">По дни</button><button data-group="month">По месеци</button>
     </div>
+    <span class="spacer"></span>
+    <span class="who"><span id="who"></span><button class="link" id="logout" hidden>Изход</button></span>
   </div>
 
   <div class="summary">
@@ -170,6 +191,7 @@
   <div class="tabs" role="tablist">
     <button role="tab" data-tab="expense">Разходи</button>
     <button role="tab" data-tab="revenue">Приходи</button>
+    <button role="tab" data-tab="history">История</button>
     <button role="tab" data-tab="settings">Настройки</button>
     <span class="sync" id="syncInfo"></span>
     <button class="ghost" id="editCols" style="align-self:center;margin-bottom:4px" title="Преименуване, подреждане и добавяне на колони">Редактирай колони</button>
@@ -177,6 +199,8 @@
   </div>
   <div id="view"></div>
 </main>
+
+<div id="auth" hidden></div>
 
 <dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
 
@@ -200,6 +224,7 @@ const toNum = (v) => { const s = String(v ?? "").trim().replace(/\s/g, "").repla
 async function api(path, body) {
   const r = await fetch(path.replace(/^\//, ""), body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
   const j = await r.json().catch(() => ({ error: "Невалиден отговор от сървъра" }));
+  if (r.status === 401 && j.login) showAuth(false); // сесията е изтекла
   if (!r.ok) throw new Error(j.error || "Грешка");
   return j;
 }
@@ -207,7 +232,7 @@ async function api(path, body) {
 // ------------------------------------------------------------ Състояние
 const S = {
   mode: "month", anchor: fmt(new Date()), from: null, to: null, group: "month", tab: "expense", editCols: false,
-  meta: null, days: [], syncError: null, loading: false, loadedAt: null,
+  meta: null, days: [], syncError: null, loading: false, loadedAt: null, histKind: "",
 };
 const today = () => fmt(new Date());
 
@@ -265,7 +290,11 @@ const sum = (days, f) => days.reduce((s, d) => s + f(d), 0);
 
 // ------------------------------------------------------------ Зареждане
 async function init() {
-  try { S.meta = await api("/api/state"); }
+  try {
+    const sess = await api("/api/session");
+    if (sess.auth && !sess.user) return showAuth(sess.setup);
+    S.meta = await api("/api/state");
+  }
   catch (e) { $("#view").innerHTML = `<div class="notice">${esc(e.message)}</div>`; return; }
   bindChrome();
   load();
@@ -295,7 +324,10 @@ function updateChrome() {
   document.querySelectorAll("#grouping button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.group === S.group));
   document.querySelectorAll(".tabs [role=tab]").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === S.tab));
   $("#refresh").disabled = S.loading;
-  $("#editCols").hidden = S.tab === "settings";
+  $("#editCols").hidden = S.tab === "settings" || S.tab === "history";
+  const u = S.meta.auth?.user;
+  $("#who").textContent = u ? u.name : "";
+  $("#logout").hidden = !u;
   $("#editCols").setAttribute("aria-pressed", S.editCols);
   $("#editCols").textContent = S.editCols ? "Готово" : "Редактирай колони";
   $("#syncInfo").textContent = S.loading ? "Зареждане…" : S.loadedAt ? `Обновено ${S.loadedAt.toLocaleTimeString("bg-BG", { hour: "2-digit", minute: "2-digit" })}${S.meta.mock ? " · демо данни" : ""}` : "";
@@ -327,6 +359,7 @@ function bindChrome() {
   $("#toPick").onchange = pickRange;
   $("#editCols").onclick = () => { S.editCols = !S.editCols; render(); };
   $("#refresh").onclick = () => load(true);
+  $("#logout").onclick = async () => { await api("/api/logout", {}).catch(() => {}); location.reload(); };
   document.querySelector(".tabs").onclick = (e) => { const b = e.target.closest("[role=tab]"); if (!b) return; S.tab = b.dataset.tab; render(); };
 }
 
@@ -344,8 +377,9 @@ function render() {
   let html = "";
   if (S.tab === "revenue") html = revenueTable();
   else if (S.tab === "expense") html = expenseTable();
+  else if (S.tab === "history") { html = historyFrame(); setTimeout(loadHistory); }
   else html = settingsView();
-  $("#view").innerHTML = (S.tab !== "settings" ? notice : "") + html;
+  $("#view").innerHTML = (S.tab === "revenue" || S.tab === "expense" ? notice : "") + html;
 
   if (focusKey) { const el = document.querySelector(`[data-key="${CSS.escape(focusKey)}"]`); if (el) { el.focus(); el.select?.(); } }
 }
@@ -650,7 +684,123 @@ function askFloatReset() {
   });
 }
 
+// ------------------------------------------------------------ История
+// Промени от администраторите и четенията от базата за избрания период
+const HIST_KINDS = [["", "Всички"], ["change", "Промени"], ["sync", "Четене от базата"]];
+const WHAT = { sales: "Продажби по групи", groups: "Групи артикули", detail: "Артикули за ден" };
+
+function historyFrame() {
+  return `<div class="history-bar"><div class="seg" role="group" aria-label="Вид">
+      ${HIST_KINDS.map(([k, l]) => `<button data-histkind="${k}" aria-pressed="${S.histKind === k}">${l}</button>`).join("")}</div>
+      <span class="muted" id="histInfo">Зареждане…</span></div>
+    <div class="tablewrap" id="histBody"></div>`;
+}
+
+let histSeq = 0;
+async function loadHistory() {
+  const p = period(), seq = ++histSeq;
+  let r;
+  try { r = await api(`/api/history?from=${p.from}&to=${p.to}&kind=${S.histKind}`); }
+  catch (e) { if (seq === histSeq && $("#histInfo")) $("#histInfo").textContent = e.message; return; }
+  if (seq !== histSeq || S.tab !== "history" || !$("#histBody")) return;
+  $("#histInfo").textContent = r.entries.length
+    ? `${r.entries.length} записа${r.truncated ? " (показани са последните; изберете по-кратък период)" : ""}` : "";
+  $("#histBody").innerHTML = r.entries.length ? `<table class="history"><thead><tr><th>Време</th><th>Потребител</th><th>Събитие</th></tr></thead>
+    <tbody>${r.entries.map(histRow).join("")}</tbody></table>` : `<div class="empty">Няма записи за периода.</div>`;
+}
+
+function histRow(e) {
+  const t = new Date(e.at);
+  const time = `${pad(t.getDate())}.${pad(t.getMonth() + 1)}.${t.getFullYear()} ${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}`;
+  const user = e.user ? `<span title="${esc(e.user)}">${esc(e.name || e.user)}</span>` : `<span class="muted">—</span>`;
+  let what;
+  if (e.kind === "sync") {
+    const parts = [WHAT[e.what] || e.what];
+    if (e.from) parts.push(e.from === e.to ? short(e.from, true) : `${short(e.from)} – ${short(e.to, true)}`);
+    if (e.days) parts.push(`${e.days} дни`);
+    if (e.rows != null) parts.push(`${e.rows} реда`);
+    if (e.amount != null) parts.push(m(e.amount));
+    parts.push(`${(e.ms / 1000).toLocaleString("bg-BG", { maximumFractionDigits: 1 })} с`);
+    what = `<span class="tag">база${e.trigger === "manual" ? " · ръчно" : ""}</span>${esc(parts.join(" · "))}${e.error ? `<div class="err">${esc(e.error)}</div>` : ""}`;
+  } else what = `<span class="tag">промяна</span>${esc(e.text)}`;
+  return `<tr><td class="time">${time}</td><td class="user">${user}</td><td>${what}</td></tr>`;
+}
+
+// ------------------------------------------------------------ Вход и акаунти
+// setup = още няма акаунти: създава се първият
+function showAuth(setup) {
+  if (dlg.open) dlg.close();
+  document.querySelector("main").hidden = true;
+  const box = $("#auth");
+  box.hidden = false;
+  box.innerHTML = `<form class="authbox" id="authForm">
+    <h1>${setup ? "Първи акаунт" : "Вход"}</h1>
+    ${setup ? `<p class="muted" style="margin:0">Още няма акаунти. Създайте администратор; другите акаунти се добавят после от Настройки.</p>` : ""}
+    <label for="aUser">Име</label><input class="field" id="aUser" autocomplete="username" autocapitalize="none" required>
+    <label for="aPass">Парола</label><input class="field" id="aPass" type="password" autocomplete="${setup ? "new-password" : "current-password"}" required>
+    ${setup ? `<label for="aPass2">Паролата отново</label><input class="field" id="aPass2" type="password" autocomplete="new-password" required>` : ""}
+    <p class="err" id="aErr" style="margin:10px 0 0"></p>
+    <button class="primary">${setup ? "Създай и влез" : "Влез"}</button>
+  </form>`;
+  $("#aUser").focus();
+  $("#authForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const username = $("#aUser").value, password = $("#aPass").value;
+    if (setup && password !== $("#aPass2").value) { $("#aErr").textContent = "Паролите не съвпадат"; return; }
+    try { await api(setup ? "/api/setup" : "/api/login", { username, password }); location.reload(); }
+    catch (err) { $("#aErr").textContent = err.message; $("#aPass").select(); }
+  };
+}
+
+function usersView(a) {
+  const when = (s) => (s ? new Date(s).toLocaleString("bg-BG", { dateStyle: "short", timeStyle: "short" }) : "—");
+  return `<p class="help">Всички акаунти са администратори. Влезли сте като <strong>${esc(a.user?.name)}</strong>.</p>
+    <table class="maptable"><thead><tr><th>Име</th><th>Създаден</th><th>Последен вход</th><th></th></tr></thead><tbody>
+    ${a.users.map((u) => `<tr><td>${esc(u.username)}${u.username === a.user?.name ? ` <span class="muted">(вие)</span>` : ""}</td>
+      <td class="muted">${when(u.createdAt)}</td><td class="muted">${when(u.lastLogin)}</td>
+      <td><button class="ghost" data-userpw="${esc(u.username)}">Смени паролата</button>
+        ${u.username === a.user?.name ? "" : `<button class="ghost" data-userdel="${esc(u.username)}">Изтрий</button>`}</td></tr>`).join("")}
+    </tbody></table>
+    <div class="actions" style="justify-content:flex-start;margin-top:8px"><button class="ghost" id="addUser">+ Нов акаунт</button></div>`;
+}
+
+// Без име — нов акаунт; с име — нова парола за този акаунт
+function openUser(username) {
+  const isNew = !username;
+  showDialog(`<h2>${isNew ? "Нов акаунт" : `Нова парола за „${esc(username)}“`}</h2>
+    <p class="sub">${isNew ? "Новият акаунт също е администратор." : "Акаунтът ще излезе от другите си устройства."}</p>
+    ${isNew ? `<div class="row"><input class="field" id="uName" placeholder="Име" autocomplete="off" autocapitalize="none"></div>` : ""}
+    <div class="row"><input class="field" id="uPass" type="password" placeholder="Парола (поне 8 знака)" autocomplete="new-password"></div>
+    <div class="row"><input class="field" id="uPass2" type="password" placeholder="Паролата отново" autocomplete="new-password"></div>
+    <div class="actions"><button class="ghost" id="cancel">Отказ</button><button class="primary" id="ok">${isNew ? "Създай" : "Запази"}</button></div>`, (root) => {
+    $("#cancel", root).onclick = closeDialog;
+    $("#ok", root).onclick = async () => {
+      const password = $("#uPass", root).value;
+      if (password !== $("#uPass2", root).value) return alert("Паролите не съвпадат");
+      try {
+        const r = await api("/api/users", isNew ? { action: "add", username: $("#uName", root).value, password } : { action: "password", username, password });
+        S.meta.auth.users = r.users; closeDialog(); render();
+      } catch (err) { alert(err.message); }
+    };
+  });
+  setTimeout(() => $(isNew ? "#uName" : "#uPass")?.focus(), 0);
+}
+
 // ------------------------------------------------------------ Настройки
+function accessHelp() {
+  const a = S.meta.auth, b = S.meta.backup;
+  const access = !a?.enabled ? `<p class="help">Демо режим: няма вход.</p>` : usersView(a);
+  let backup = "";
+  if (b && !b.mock) {
+    const when = b.at ? new Date(b.at).toLocaleString("bg-BG") : null;
+    backup = `<p class="help">Всеки ден се прави копие на данните в <strong>${esc(b.dir)}</strong>. Пазят се последните ${b.keepDays} дни.
+      ${when ? `Последно копие: ${esc(when)} (${esc(b.file)}).` : "Още няма копие."}</p>
+      ${b.error ? `<p class="err">Последното копие не е направено: ${esc(b.error)}</p>` : ""}
+      <div class="actions" style="justify-content:flex-start;margin-top:0"><button class="ghost" id="backupNow">Направи копие сега</button><span id="backupMsg" class="muted"></span></div>`;
+  }
+  return `<h3>Акаунти</h3>${access}<h3>Резервни копия</h3>${backup || `<p class="help">В демо режим не се правят копия.</p>`}`;
+}
+
 function settingsView() {
   const s = S.meta.settings, cols = revCols();
   const opts = (sel, withInherit) => (withInherit ? `<option value="">— автоматично —</option>` : "") +
@@ -684,6 +834,8 @@ function settingsView() {
     <h3>Данни от Microinvest</h3>
     <p class="help">Продажбите се пазят локално след първото зареждане, а последните 3 дни се четат наново всеки път. Ако сте коригирали стари документи в Microinvest, изтеглете всичко наново.</p>
     <button class="ghost" id="clearCache">Изтегли всичко наново</button>
+
+    ${accessHelp()}
   </div>`;
 }
 
@@ -708,6 +860,19 @@ document.addEventListener("click", async (e) => {
       load();
     } catch (err) { render(); $("#connMsg").textContent = err.message; $("#connMsg").className = "err"; }
   }
+  if (e.target.id === "addUser") openUser();
+  if (e.target.dataset?.userpw) openUser(e.target.dataset.userpw);
+  if (e.target.dataset?.userdel) {
+    const name = e.target.dataset.userdel;
+    if (!confirm(`Да изтрия ли акаунта „${name}“?`)) return;
+    try { const r = await api("/api/users", { action: "delete", username: name }); S.meta.auth.users = r.users; render(); }
+    catch (err) { alert(err.message); }
+  }
+  if (e.target.id === "backupNow") {
+    try { const r = await api("/api/backup", {}); S.meta.backup = r.backup; render(); $("#backupMsg").textContent = "Копието е направено."; }
+    catch (err) { $("#backupMsg").textContent = err.message; $("#backupMsg").className = "err"; }
+  }
+  if (e.target.dataset?.histkind !== undefined) { S.histKind = e.target.dataset.histkind; render(); }
   if (e.target.id === "clearCache") {
     if (!confirm("Да изтегля ли наново всички продажби от Microinvest? Ръчните стойности се запазват.")) return;
     await api("/api/clear-cache", {}); load();

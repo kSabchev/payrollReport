@@ -5,3 +5,5 @@ data/
 backups/
 data.json
 data.json.tmp
+history/
+history-demo/
