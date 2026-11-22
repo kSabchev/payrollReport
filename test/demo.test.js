@@ -33,9 +33,9 @@ test("отчет за месец: всеки ден, приходи от дем�
   assert.equal(r.days.length, 31);
   assert.equal(r.syncError, null);
   assert.ok(sum(r.days, (d) => Object.values(d.revenue).reduce((a, b) => a + b, 0)) > 0);
-  const file = srv.readJson("data-demo.json");
-  const day = Object.keys(file.expenses).find((d) => d.startsWith("2026-10"));
-  assert.deepEqual(r.days.find((d) => d.date === day).expenses, file.expenses[day]);
+  const { expenses } = srv.readJson("data-demo.json").byStore.s1; // без store — първият магазин
+  const day = Object.keys(expenses).find((d) => d.startsWith("2026-10"));
+  assert.deepEqual(r.days.find((d) => d.date === day).expenses, expenses[day]);
 });
 
 test("невалиден период", async () => {
@@ -105,12 +105,12 @@ test("подгрупите наследяват колоната на основ
 });
 
 test("оборотни пари: смяна на сумата преизчислява остатъка", async () => {
-  const st = (await api("GET", "/api/state")).json.float;
+  const st = (await api("GET", "/api/state")).json.floats.s1;
   assert.ok(st.current);
   const r = await api("POST", "/api/float", { action: "set", amount: st.current.amount + 1000 });
   assert.equal(r.status, 200);
-  assert.equal(r.json.float.current.amount, st.current.amount + 1000);
-  if (st.balance != null) assert.equal(r.json.float.balance, Math.round((st.balance + 1000) * 100) / 100);
+  assert.equal(r.json.floats.s1.current.amount, st.current.amount + 1000);
+  if (st.balance != null) assert.equal(r.json.floats.s1.balance, Math.round((st.balance + 1000) * 100) / 100);
   assert.equal((await api("POST", "/api/float", { action: "set", amount: -5 })).status, 400);
 });
 

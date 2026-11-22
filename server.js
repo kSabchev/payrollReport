@@ -25,13 +25,16 @@ const AUTH = !MOCK || process.env.DEMO_LOGIN === "1";
 
 // ---------------------------------------------------------------- Данни
 const DEFAULT_DATA = {
+  dataVersion: 2,
   settings: {
-    objectId: null,          // null = всички обекти
     withVat: true,           // сумите с ДДС
     operationTypes: [2],     // 2 = Продажба
     defaultRevenueColumn: "goods", // къде отиват продажбите от групи без съпоставка
-    floatDefault: 8500,      // оборотни пари, предлагани при нулиране
   },
+  // Магазини: всеки е обект в Microinvest (ObjectID) със свои разходи и оборотни пари.
+  // objectId null = всички обекти (позволено само при един магазин).
+  stores: [],          // [{ id, name, objectId, floatDefault }]
+  byStore: {},         // id на магазин -> { expenses, revenueManual, float, floatBalance }
   revenueColumns: [
     { id: "service", name: "Сервиз" },
     { id: "prima", name: "Прима карти" },
@@ -49,27 +52,43 @@ const DEFAULT_DATA = {
     { id: "eshop", name: "Онлайн магазин" },
   ],
   groupMap: {},        // id на група в Microinvest -> id на колона в Приходи (подгрупите наследяват)
-  expenses: {},        // "YYYY-MM-DD" -> { колона: число | [{name, value}] }
-  revenueManual: {},   // "YYYY-MM-DD" -> { колона: число }  (ръчни стойности и корекции)
-  cache: {},           // "YYYY-MM-DD" -> { byGroup: { групаId: сума }, fetchedAt }
-  float: [],           // нулирания на оборотните пари, по дата: [{ date, amount, at }]
-  floatBalance: {},    // "YYYY-MM-DD" -> оборотни − разходи в края на деня
+  cache: {},           // "YYYY-MM-DD" -> { byObject: { обектId: { групаId: сума } }, fetchedAt } — продажбите на всички обекти
   users: [],           // акаунти (всички са администратори): [{ username, salt, hash, createdAt, lastLogin }]
   sessions: {},        // sha256(ключ от бисквитката) -> { username, created, expires }
 };
 
+// Данните на един магазин:
+//   expenses:      "YYYY-MM-DD" -> { колона: число | [{name, value}] }
+//   revenueManual: "YYYY-MM-DD" -> { колона: число }  (ръчни стойности и корекции)
+//   float:         нулирания на оборотните пари, по дата: [{ date, amount, at }]
+//   floatBalance:  "YYYY-MM-DD" -> оборотни − разходи в края на деня
+const emptyStore = () => ({ expenses: {}, revenueManual: {}, float: [], floatBalance: {} });
+
+let migratedFrom = null; // версия на данните преди преобразуване (за копие при стартиране)
 let data = loadData();
 
 function loadData() {
-  try {
-    const d = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-    const { apiBase, apiKey, ...settings } = d.settings || {}; // от старата връзка през HTTP
-    return { ...structuredClone(DEFAULT_DATA), ...d, settings: { ...DEFAULT_DATA.settings, ...settings } };
-  } catch {
-    const d = structuredClone(DEFAULT_DATA);
+  let d;
+  try { d = JSON.parse(fs.readFileSync(DATA_FILE, "utf8")); }
+  catch {
+    d = structuredClone(DEFAULT_DATA);
     if (MOCK) d.groupMap = { 1: "phones", 3: "prima", 4: "service" };
-    return d;
   }
+  // apiBase/apiKey са от старата връзка през HTTP; objectId/floatDefault вече са на магазина
+  const { apiBase, apiKey, objectId, floatDefault, ...settings } = d.settings || {};
+  const out = { ...structuredClone(DEFAULT_DATA), ...d, settings: { ...DEFAULT_DATA.settings, ...settings } };
+  if ((d.dataVersion || 1) < 2) {
+    // Версия 1: един магазин, разходите и оборотните пари са на първо ниво
+    migratedFrom = d.dataVersion || 1;
+    out.stores = [{ id: "s1", name: "Магазин", objectId: objectId ?? null, floatDefault: floatDefault ?? 8500 }];
+    out.byStore = { s1: { expenses: d.expenses || {}, revenueManual: d.revenueManual || {}, float: d.float || [], floatBalance: d.floatBalance || {} } };
+    out.cache = {}; // старият кеш няма разбивка по обекти
+    for (const k of ["expenses", "revenueManual", "float", "floatBalance"]) delete out[k];
+    out.dataVersion = 2;
+  }
+  if (!out.stores.length) out.stores.push({ id: "s1", name: "Магазин", objectId: null, floatDefault: 8500 });
+  for (const st of out.stores) out.byStore[st.id] = { ...emptyStore(), ...out.byStore[st.id] };
+  return out;
 }
 
 function saveData() {
@@ -297,14 +316,17 @@ async function query(text, params = {}) {
 const toSqlDate = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d)); };
 const fromSqlDate = (d) => d.toISOString().slice(0, 10);
 
-// Общи условия: вид операция, период (дати като "YYYY-MM-DD"), обект
-function salesFilter(from, to) {
+// Общи условия: вид операция, период (дати като "YYYY-MM-DD"), обекти (null = всички)
+function salesFilter(from, to, objectIds = null) {
   const s = data.settings;
   const params = { from: [sql.Date, toSqlDate(from)], to: [sql.Date, toSqlDate(to)], vat: [sql.Bit, s.withVat] };
   const types = s.operationTypes.map((t, i) => { params["t" + i] = [sql.Int, t]; return "@t" + i; });
   let where = `o.OperType IN (${types.join(", ")})
     AND o.[Date] >= @from AND o.[Date] < DATEADD(day, 1, @to)`;
-  if (s.objectId != null) { where += " AND o.ObjectID = @obj"; params.obj = [sql.Int, s.objectId]; }
+  if (objectIds) {
+    const objs = objectIds.map((id, i) => { params["o" + i] = [sql.Int, id]; return "@o" + i; });
+    where += ` AND o.ObjectID IN (${objs.join(", ") || "NULL"})`;
+  }
   return { where, params };
 }
 // Реалната цена на продажбата (с корекциите от панела за продажба), с или без ДДС
@@ -312,20 +334,21 @@ const AMOUNT = "o.Qtty * (o.PriceOut + CASE WHEN @vat = 1 THEN o.VATOut ELSE 0 E
 
 const source = MOCK ? null : {
   groups: () => query("SELECT ID AS id, Code AS code, Name AS name FROM GoodsGroups"),
+  objects: () => query("SELECT ID AS id, Code AS code, Name AS name FROM Objects"),
 
-  // [{ day, groupId, amount }]
+  // [{ day, objectId, groupId, amount }] за всички обекти
   async salesByGroup(from, to) {
     const { where, params } = salesFilter(from, to);
-    const rows = await query(`SELECT CAST(o.[Date] AS date) AS day, g.GroupID AS groupId, SUM(${AMOUNT}) AS amount
+    const rows = await query(`SELECT CAST(o.[Date] AS date) AS day, o.ObjectID AS objectId, g.GroupID AS groupId, SUM(${AMOUNT}) AS amount
       FROM Operations o LEFT JOIN Goods g ON g.ID = o.GoodID
       WHERE ${where}
-      GROUP BY CAST(o.[Date] AS date), g.GroupID`, params);
+      GROUP BY CAST(o.[Date] AS date), o.ObjectID, g.GroupID`, params);
     return rows.map((r) => ({ ...r, day: fromSqlDate(r.day) }));
   },
 
-  // [{ goodId, name, code, groupId, doc, qtty, amount }] за един ден
-  saleLines(date) {
-    const { where, params } = salesFilter(date, date);
+  // [{ goodId, name, code, groupId, doc, qtty, amount }] за един ден и дадени обекти (null = всички)
+  saleLines(date, objectIds) {
+    const { where, params } = salesFilter(date, date, objectIds);
     return query(`SELECT o.GoodID AS goodId, g.Name AS name, g.Code AS code, g.GroupID AS groupId, o.Acct AS doc,
         SUM(o.Qtty) AS qtty, SUM(${AMOUNT}) AS amount
       FROM Operations o LEFT JOIN Goods g ON g.ID = o.GoodID
@@ -337,17 +360,27 @@ const source = MOCK ? null : {
 // Основните групи по код; подгрупите (AER…, AES…) ги наследяват
 const DEFAULT_GROUP_CODES = { AES: "service", AEU: "prima", AET: "phones", AER: "goods" };
 
-// Групи артикули (кеширани 10 минути)
-let catalog = { groups: [], loadedAt: 0 };
+// Групи артикули и обекти (кеширани 10 минути). Обектите не са задължителни:
+// ако потребителят няма права над Objects, магазините се задават с номер на обекта.
+let catalog = { groups: [], objects: [], objectsError: null, loadedAt: 0 };
 async function loadCatalog(force = false, user = null) {
   if (!force && Date.now() - catalog.loadedAt < 10 * 60 * 1000 && catalog.groups.length) return catalog;
   const groups = await fromDb("groups", user, { trigger: force ? "manual" : "auto" }, async () => {
     const g = await (MOCK ? mockSource : source).groups();
     return [g, { rows: g.length }];
   });
+  let objects = [], objectsError = null;
+  try {
+    objects = await fromDb("objects", user, { trigger: force ? "manual" : "auto" }, async () => {
+      const o = await (MOCK ? mockSource : source).objects();
+      return [o, { rows: o.length }];
+    });
+  } catch (e) { objectsError = e.message; }
   catalog = {
     groups: groups.map((g) => ({ id: g.id, code: String(g.code ?? "").trim(), name: g.name || `Група ${g.id}` }))
       .sort((a, b) => a.code.localeCompare(b.code)),
+    objects: objects.map((o) => ({ id: o.id, code: String(o.code ?? "").trim(), name: o.name || `Обект ${o.id}` })).sort((a, b) => a.id - b.id),
+    objectsError,
     loadedAt: Date.now(),
   };
   // При първа връзка свързва основните групи с колоните
@@ -387,11 +420,12 @@ async function syncRange(from, to, force, user) {
     const r = await (MOCK ? mockSource : source).salesByGroup(a, b);
     return [r, { rows: r.length, amount: round2(r.reduce((s, x) => s + Number(x.amount || 0), 0)) }];
   });
-  const fresh = Object.fromEntries(need.map((d) => [d, { byGroup: {}, fetchedAt: Date.now() }]));
+  const fresh = Object.fromEntries(need.map((d) => [d, { byObject: {}, fetchedAt: Date.now() }]));
   for (const r of rows) {
     if (!fresh[r.day]) continue;
+    const byGroup = (fresh[r.day].byObject[String(r.objectId ?? "none")] ||= {});
     const gid = String(r.groupId ?? "none");
-    fresh[r.day].byGroup[gid] = round2((fresh[r.day].byGroup[gid] || 0) + Number(r.amount || 0));
+    byGroup[gid] = round2((byGroup[gid] || 0) + Number(r.amount || 0));
   }
   Object.assign(data.cache, fresh);
   saveData();
@@ -425,8 +459,28 @@ function resetPromptDay(month) {
   return fmt(d);
 }
 
-function expenseTotal(date) {
-  const day = data.expenses[date];
+// ---------------------------------------------------------------- Магазини
+const sd = (st) => data.byStore[st.id];
+
+// Магазин по id; без id — първият. "all" се приема само където allowAll.
+function storeParam(id, allowAll = false) {
+  if (id === "all" && allowAll) return data.stores.length > 1 ? "all" : data.stores[0];
+  if (id === undefined || id === null || id === "") return data.stores[0];
+  const st = data.stores.find((x) => x.id === id);
+  if (!st) throw new Error("Няма такъв магазин");
+  return st;
+}
+
+// Обектите в Microinvest за избора (null = всички обекти)
+const objectIdsOf = (sel) => {
+  const list = sel === "all" ? data.stores : [sel];
+  return list.some((st) => st.objectId == null) ? null : list.map((st) => st.objectId);
+};
+
+const storeLabel = (st) => (data.stores.length > 1 ? `${st.name} · ` : "");
+
+function expenseTotal(st, date) {
+  const day = sd(st).expenses[date];
   if (!day) return 0;
   let s = 0;
   for (const c of data.expenseColumns) {
@@ -436,70 +490,112 @@ function expenseTotal(date) {
   return s;
 }
 
-function ensureFloat() {
-  if (data.float.length) return false;
-  data.float.push({ date: monthStart(fmt(new Date())), amount: data.settings.floatDefault, at: Date.now() });
+function ensureFloat(st) {
+  const f = sd(st).float;
+  if (f.length) return false;
+  f.push({ date: monthStart(fmt(new Date())), amount: st.floatDefault, at: Date.now() });
   return true;
 }
 
 // Преизчислява остатъка за всеки ден от първото нулиране до днес. Връща true при промяна.
-function recomputeFloat() {
-  const out = {};
-  if (data.float.length) {
+function recomputeFloat(st) {
+  const { float } = sd(st), out = {};
+  if (float.length) {
     let i = 0, bal = 0;
-    for (const d of daysBetween(data.float[0].date, fmt(new Date()))) {
-      while (i < data.float.length && data.float[i].date === d) bal = data.float[i++].amount;
-      bal = round2(bal - expenseTotal(d));
+    for (const d of daysBetween(float[0].date, fmt(new Date()))) {
+      while (i < float.length && float[i].date === d) bal = float[i++].amount;
+      bal = round2(bal - expenseTotal(st, d));
       out[d] = bal;
     }
   }
-  if (JSON.stringify(out) === JSON.stringify(data.floatBalance)) return false;
-  data.floatBalance = out;
+  if (JSON.stringify(out) === JSON.stringify(sd(st).floatBalance)) return false;
+  sd(st).floatBalance = out;
   return true;
 }
 
 function refreshFloat() {
-  if (ensureFloat() | recomputeFloat()) saveData();
+  let changed = false;
+  for (const st of data.stores) changed = (ensureFloat(st) | recomputeFloat(st)) || changed;
+  if (changed) saveData();
 }
 
-function activeReset() {
+function activeReset(st) {
   const today = fmt(new Date());
-  return data.float.findLast((r) => r.date <= today) || null;
+  return sd(st).float.findLast((r) => r.date <= today) || null;
 }
 
-function floatStatus() {
-  const today = fmt(new Date()), month = today.slice(0, 7);
-  const due = today >= resetPromptDay(month) && !data.float.some((r) => r.date.startsWith(month));
+function floatStatus(st) {
+  const today = fmt(new Date()), month = today.slice(0, 7), { float, floatBalance } = sd(st);
+  const due = today >= resetPromptDay(month) && !float.some((r) => r.date.startsWith(month));
   return {
-    resets: data.float.map(({ date, amount }) => ({ date, amount })),
-    current: activeReset(),
-    balance: data.floatBalance[today] ?? null,
-    default: data.settings.floatDefault,
+    store: st.id, name: st.name,
+    resets: float.map(({ date, amount }) => ({ date, amount })),
+    current: activeReset(st),
+    balance: floatBalance[today] ?? null,
+    default: st.floatDefault,
     pendingReset: due ? { date: month + "-01" } : null,
   };
 }
 
-const balancesFor = (from, to) => Object.fromEntries(daysBetween(from, to).map((d) => [d, data.floatBalance[d] ?? null]));
+const floatsAll = () => Object.fromEntries(data.stores.map((st) => [st.id, floatStatus(st)]));
 
-function buildReport(from, to) {
-  const days = daysBetween(from, to).map((date) => {
-    const api = {};
-    for (const c of data.revenueColumns) api[c.id] = 0;
-    const cached = data.cache[date];
-    if (cached) {
-      for (const [gid, amount] of Object.entries(cached.byGroup)) {
+const balancesFor = (st, from, to) => Object.fromEntries(daysBetween(from, to).map((d) => [d, sd(st).floatBalance[d] ?? null]));
+
+// Продажби от кеша за магазина, по колони
+function storeRevenueApi(st, cached) {
+  const api = {};
+  for (const c of data.revenueColumns) api[c.id] = 0;
+  if (cached?.byObject) {
+    const objs = st.objectId == null ? Object.keys(cached.byObject) : [String(st.objectId)];
+    for (const o of objs) {
+      for (const [gid, amount] of Object.entries(cached.byObject[o] || {})) {
         const col = columnForGroup(gid);
         if (col in api) api[col] += amount;
       }
     }
-    for (const k in api) api[k] = round2(api[k]);
-    const manual = data.revenueManual[date] || {};
+  }
+  for (const k in api) api[k] = round2(api[k]);
+  return api;
+}
+
+function storeDays(st, from, to) {
+  const { revenueManual, expenses, floatBalance } = sd(st);
+  return daysBetween(from, to).map((date) => {
+    const cached = data.cache[date];
+    const api = storeRevenueApi(st, cached);
+    const manual = revenueManual[date] || {};
     const revenue = {};
     for (const c of data.revenueColumns) revenue[c.id] = manual[c.id] ?? api[c.id];
-    return { date, revenue, revenueApi: api, edited: Object.keys(manual), loaded: !!cached, expenses: data.expenses[date] || {},
-      balance: data.floatBalance[date] ?? null };
+    return { date, revenue, revenueApi: api, edited: Object.keys(manual), loaded: !!cached, expenses: expenses[date] || {},
+      balance: floatBalance[date] ?? null };
   });
-  return days;
+}
+
+// "all" — сбор от всички магазини; само за четене (разходите от списъци стават суми)
+function buildReport(from, to, sel) {
+  if (sel !== "all") return storeDays(sel, from, to);
+  const per = data.stores.map((st) => storeDays(st, from, to));
+  const add = (a, b) => round2((a || 0) + (b || 0));
+  const expVal = (v) => (Array.isArray(v) ? v.reduce((a, i) => a + (i.value || 0), 0) : v);
+  return per[0].map((first, i) => {
+    const days = per.map((p) => p[i]);
+    const out = { date: first.date, revenue: {}, revenueApi: {}, edited: [], loaded: days.every((d) => d.loaded), expenses: {}, balance: null, readonly: true };
+    for (const c of data.revenueColumns) {
+      out.revenue[c.id] = days.reduce((s, d) => add(s, d.revenue[c.id]), 0);
+      out.revenueApi[c.id] = days.reduce((s, d) => add(s, d.revenueApi[c.id]), 0);
+    }
+    for (const c of data.expenseColumns) {
+      const vals = days.map((d) => expVal(d.expenses[c.id])).filter((v) => v != null);
+      if (vals.length) out.expenses[c.id] = vals.reduce(add, 0);
+    }
+    const bals = days.map((d) => d.balance).filter((b) => b != null);
+    if (bals.length) out.balance = bals.reduce(add, 0);
+    return out;
+  });
+}
+
+function storesView() {
+  return data.stores.map((st) => ({ ...st, hasData: Object.keys(sd(st).expenses).length > 0 || Object.keys(sd(st).revenueManual).length > 0 }));
 }
 
 function mappedColumns() {
@@ -550,27 +646,28 @@ const handlers = {
     try { groups = (await loadCatalog(false, user)).groups; } catch (e) { catalogError = e.message; }
     return { settings: data.settings, connection: connectionInfo(), revenueColumns: data.revenueColumns, expenseColumns: data.expenseColumns,
       groupMap: data.groupMap, groups, mappedColumns: mappedColumns(), catalogError, mock: MOCK,
+      stores: storesView(), objects: catalog.objects, objectsError: catalog.objectsError,
       isAdmin: true, // до приложението стигат само администратори
       auth: { enabled: AUTH, user: user && { name: user.name }, users: AUTH ? usersList() : [] },
-      backup: backupStatus(), float: floatStatus() };
+      backup: backupStatus(), floats: floatsAll() };
   },
 
   "GET /api/report": async (q, _, user) => {
-    const from = q.get("from"), to = q.get("to");
+    const from = q.get("from"), to = q.get("to"), sel = storeParam(q.get("store"), true);
     if (!isDate(from) || !isDate(to) || from > to) throw new Error("Невалиден период");
     let syncError = null;
     try { await syncRange(from, to, q.get("force") === "1", user); } catch (e) { syncError = e.message; }
     refreshFloat();
-    return { days: buildReport(from, to), syncError, mappedColumns: mappedColumns(), float: floatStatus() };
+    return { days: buildReport(from, to, sel), syncError, mappedColumns: mappedColumns(), floats: floatsAll() };
   },
 
   // Продажбите от Microinvest за един ден и една колона — за проверка
   "GET /api/detail": async (q, _, user) => {
-    const date = q.get("date"), col = q.get("col");
+    const date = q.get("date"), col = q.get("col"), sel = storeParam(q.get("store"), true);
     if (!isDate(date)) throw new Error("Невалидна дата");
     await loadCatalog(false, user);
     const lines = await fromDb("detail", user, { trigger: "manual", from: date, to: date }, async () => {
-      const r = await (MOCK ? mockSource : source).saleLines(date);
+      const r = await (MOCK ? mockSource : source).saleLines(date, objectIdsOf(sel));
       return [r, { rows: r.length }];
     });
     const byItem = new Map();
@@ -594,9 +691,10 @@ const handlers = {
   },
 
   "POST /api/expense": async (_, b, user) => {
+    const st = storeParam(b.store), { expenses } = sd(st);
     if (!isDate(b.date) || !data.expenseColumns.some((c) => c.id === b.col)) throw new Error("Невалидни данни");
     const col = data.expenseColumns.find((c) => c.id === b.col);
-    const day = (data.expenses[b.date] ||= {});
+    const day = (expenses[b.date] ||= {});
     const before = structuredClone(day[b.col] ?? null);
     if (col.kind === "list") {
       const items = (b.items || []).map((i) => ({ name: String(i.name || "").trim(), value: num(i.value) })).filter((i) => i.value !== null);
@@ -606,52 +704,56 @@ const handlers = {
       if (v === null) delete day[b.col]; else day[b.col] = v;
     }
     const after = day[b.col] ?? null;
-    if (!Object.keys(day).length) delete data.expenses[b.date];
-    recomputeFloat();
+    if (!Object.keys(day).length) delete expenses[b.date];
+    recomputeFloat(st);
     saveData();
     if (!same(before, after))
-      audit(user, "expense", `Разход ${dmy(b.date)} · ${col.name}: ${showVal(before)} → ${showVal(after)}`, { date: b.date, col: b.col, before, after });
-    const balances = isDate(b.from) && isDate(b.to) && b.from <= b.to ? balancesFor(b.from, b.to) : {};
-    return { ok: true, value: after, balances, float: floatStatus() };
+      audit(user, "expense", `${storeLabel(st)}Разход ${dmy(b.date)} · ${col.name}: ${showVal(before)} → ${showVal(after)}`,
+        { store: st.id, date: b.date, col: b.col, before, after });
+    const balances = isDate(b.from) && isDate(b.to) && b.from <= b.to ? balancesFor(st, b.from, b.to) : {};
+    return { ok: true, value: after, balances, floats: floatsAll() };
   },
 
   // action "set" — променя сумата на текущия месец; "reset" — нулира от 1-во число на месеца
   "POST /api/float": async (_, b, user) => {
+    const st = storeParam(b.store), { float } = sd(st);
     const amount = num(b.amount);
     if (amount === null || amount < 0) throw new Error("Въведете сума на оборотните пари");
     let text;
     if (b.action === "set") {
-      const r = activeReset();
+      const r = activeReset(st);
       if (!r) throw new Error("Няма начална сума на оборотните пари");
       text = `Оборотни пари от ${dmy(r.date)}: ${showVal(r.amount)} → ${showVal(amount)}`;
       r.amount = amount;
     } else if (b.action === "reset") {
       const date = monthStart(fmt(new Date()));
-      const r = data.float.find((x) => x.date === date);
+      const r = float.find((x) => x.date === date);
       text = `Нулиране на оборотните пари от ${dmy(date)}: ${showVal(amount)}`;
       if (r) Object.assign(r, { amount, at: Date.now() });
-      else data.float.push({ date, amount, at: Date.now() });
-      data.float.sort((x, y) => x.date.localeCompare(y.date));
+      else float.push({ date, amount, at: Date.now() });
+      float.sort((x, y) => x.date.localeCompare(y.date));
     } else throw new Error("Невалидно действие");
-    data.settings.floatDefault = amount;
-    recomputeFloat();
+    st.floatDefault = amount;
+    recomputeFloat(st);
     saveData();
-    audit(user, "float", text, { op: b.action, amount });
-    return { ok: true, float: floatStatus() };
+    audit(user, "float", storeLabel(st) + text, { store: st.id, op: b.action, amount });
+    return { ok: true, floats: floatsAll() };
   },
 
   "POST /api/revenue": async (_, b, user) => {
+    const st = storeParam(b.store), { revenueManual } = sd(st);
     const col = data.revenueColumns.find((c) => c.id === b.col);
     if (!isDate(b.date) || !col) throw new Error("Невалидни данни");
-    const day = (data.revenueManual[b.date] ||= {});
+    const day = (revenueManual[b.date] ||= {});
     const before = day[b.col] ?? null;
     const v = num(b.value);
     if (v === null) delete day[b.col]; else day[b.col] = v;
-    if (!Object.keys(day).length) delete data.revenueManual[b.date];
+    if (!Object.keys(day).length) delete revenueManual[b.date];
     saveData();
     if (!same(before, v)) {
       const show = (x) => (x == null ? "от Microinvest" : showVal(x));
-      audit(user, "revenue", `Приход ${dmy(b.date)} · ${col.name}: ${show(before)} → ${show(v)}`, { date: b.date, col: b.col, before, after: v });
+      audit(user, "revenue", `${storeLabel(st)}Приход ${dmy(b.date)} · ${col.name}: ${show(before)} → ${show(v)}`,
+        { store: st.id, date: b.date, col: b.col, before, after: v });
     }
     return { ok: true };
   },
@@ -686,7 +788,7 @@ const handlers = {
         text = `Преместена колона в ${where}: „${list[j].name}“ ${b.dir < 0 ? "наляво" : "надясно"}`;
       }
     } else throw new Error("Невалидно действие");
-    if (b.table === "expense") recomputeFloat();
+    if (b.table === "expense") for (const st of data.stores) recomputeFloat(st);
     saveData();
     if (text) audit(user, "columns", text, { table: b.table, op: b.action, id: b.id });
     return { ok: true };
@@ -707,11 +809,6 @@ const handlers = {
 
   "POST /api/settings": async (_, b, user) => {
     const s = data.settings, changes = [];
-    if (b.objectId !== undefined) {
-      const obj = b.objectId === "" || b.objectId === null ? null : Number(b.objectId);
-      if (obj !== null && !Number.isInteger(obj)) throw new Error("Обектът трябва да е число (ID)");
-      if (obj !== s.objectId) { changes.push(`обект ${s.objectId ?? "всички"} → ${obj ?? "всички"}`); s.objectId = obj; data.cache = {}; }
-    }
     if (b.withVat !== undefined && !!b.withVat !== s.withVat) {
       s.withVat = !!b.withVat; data.cache = {};
       changes.push(s.withVat ? "суми с ДДС" : "суми без ДДС");
@@ -736,6 +833,68 @@ const handlers = {
     data.cache = {}; catalog.loadedAt = 0; saveData();
     audit(user, "cache", "Изтрити запазените продажби, ще се изтеглят наново от Microinvest");
     return { ok: true };
+  },
+
+  // Магазини: добавяне, промяна (име, обект, оборотни пари по подразбиране), изтриване
+  "POST /api/stores": async (_, b, user) => {
+    const objName = (id) => (id == null ? "всички обекти" : catalog.objects.find((o) => o.id === id)?.name ?? `обект ${id}`);
+    const parseObj = (v) => {
+      if (v === "" || v === null || v === undefined) return null;
+      const n = Number(v);
+      if (!Number.isInteger(n)) throw new Error("Обектът трябва да е число (ID в Microinvest)");
+      return n;
+    };
+    // При няколко магазина всеки трябва да е точно един обект, иначе сборът „Всички“ брои продажбите два пъти
+    const validate = (stores) => {
+      if (stores.length > 1 && stores.some((x) => x.objectId == null))
+        throw new Error("При няколко магазина всеки трябва да има избран обект от Microinvest");
+      const ids = stores.map((x) => x.objectId).filter((x) => x != null);
+      if (new Set(ids).size !== ids.length) throw new Error("Два магазина не може да са един и същ обект");
+    };
+    let text;
+    if (b.action === "add") {
+      const name = String(b.name || "").trim();
+      if (!name) throw new Error("Въведете име на магазина");
+      const floatDefault = num(b.floatDefault ?? 8500);
+      if (floatDefault === null || floatDefault < 0) throw new Error("Невалидна сума на оборотните пари");
+      const st = { id: slug(name, data.stores).replace(/^c/, "s"), name, objectId: parseObj(b.objectId), floatDefault };
+      validate([...data.stores, st]);
+      data.stores.push(st);
+      data.byStore[st.id] = emptyStore();
+      ensureFloat(st); recomputeFloat(st);
+      text = `Нов магазин „${name}“ (${objName(st.objectId)}, оборотни ${showVal(floatDefault)})`;
+    } else if (b.action === "update") {
+      const st = storeParam(b.id), next = { ...st }, changes = [];
+      if (b.name !== undefined) {
+        next.name = String(b.name).trim();
+        if (!next.name) throw new Error("Въведете име на магазина");
+        if (next.name !== st.name) changes.push(`име „${st.name}“ → „${next.name}“`);
+      }
+      if (b.objectId !== undefined) {
+        next.objectId = parseObj(b.objectId);
+        if (next.objectId !== st.objectId) changes.push(`обект ${objName(st.objectId)} → ${objName(next.objectId)}`);
+      }
+      if (b.floatDefault !== undefined) {
+        next.floatDefault = num(b.floatDefault);
+        if (next.floatDefault === null || next.floatDefault < 0) throw new Error("Невалидна сума на оборотните пари");
+        if (next.floatDefault !== st.floatDefault) changes.push(`оборотни по подразбиране ${showVal(st.floatDefault)} → ${showVal(next.floatDefault)}`);
+      }
+      validate(data.stores.map((x) => (x === st ? next : x)));
+      Object.assign(st, next);
+      if (changes.length) text = `Магазин „${st.name}“: ${changes.join("; ")}`;
+    } else if (b.action === "delete") {
+      const st = storeParam(b.id);
+      if (data.stores.length === 1) throw new Error("Трябва да има поне един магазин");
+      const d = sd(st);
+      if (Object.keys(d.expenses).length || Object.keys(d.revenueManual).length)
+        throw new Error(`Магазинът „${st.name}“ има въведени разходи или ръчни приходи и не може да се изтрие`);
+      data.stores = data.stores.filter((x) => x !== st);
+      delete data.byStore[st.id];
+      text = `Изтрит магазин „${st.name}“`;
+    } else throw new Error("Невалидно действие");
+    saveData();
+    if (text) audit(user, "stores", text, { op: b.action, id: b.id });
+    return { ok: true, stores: storesView(), floats: floatsAll() };
   },
 
   "POST /api/backup": async (_, __, user) => {
@@ -849,6 +1008,15 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(404); res.end();
 });
 
+// След преобразуване на данните: копие на стария файл, после запис в новия вид
+if (migratedFrom) {
+  let file = null;
+  try { file = backup("before-stores"); } catch (e) { console.error("Копие преди преобразуване:", e.message); }
+  saveData();
+  console.log(`Данните са преобразувани за няколко магазина${file ? `. Копие на старите: backups/${file}` : ""}`);
+  logHistory({ kind: "change", action: "migration", text: `Данните са преобразувани за няколко магазина${file ? ` (копие: ${file})` : ""}` });
+}
+
 dailyBackup();
 setInterval(dailyBackup, 60 * 60 * 1000).unref();
 
@@ -875,12 +1043,16 @@ const MOCK_ITEMS = [
   [10, "Смяна на дисплей", 4, 180], [11, "Смяна на батерия", 4, 70], [12, "Диагностика", 4, 15],
 ].map(([id, name, groupId, price]) => ({ id, code: String(100 + id), name, groupId, price }));
 
-// Псевдослучайни продажби, еднакви за дадена дата
-function mockLines(date) {
-  let seed = Number(date.replace(/-/g, "")), doc = seed % 1000 * 100;
+// Два демо обекта; вторият продава по-малко
+const MOCK_OBJECTS = [{ id: 1, code: "1", name: "Магазин Център" }, { id: 2, code: "2", name: "Магазин Мол" }];
+
+// Псевдослучайни продажби, еднакви за дадена дата и обект
+function mockLines(date, objectId = 1) {
+  let seed = (Number(date.replace(/-/g, "")) + objectId * 7919) % 233280, doc = objectId * 100000 + seed % 1000 * 100;
   const rnd = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
   const lines = [];
-  const n = parse(date).getDay() === 0 ? 3 : 8 + Math.floor(rnd() * 10);
+  const base = objectId === 1 ? 8 : 4;
+  const n = parse(date).getDay() === 0 ? 3 : base + Math.floor(rnd() * base);
   for (let i = 0; i < n; i++) {
     const it = MOCK_ITEMS[Math.floor(rnd() * MOCK_ITEMS.length)];
     if (it.groupId === 1 && rnd() > 0.3) continue;
@@ -893,6 +1065,8 @@ function mockLines(date) {
 
 const mockSource = {
   groups: async () => MOCK_GROUPS,
-  salesByGroup: async (from, to) => daysBetween(from, to).flatMap((day) => mockLines(day).map((l) => ({ day, groupId: l.groupId, amount: l.amount }))),
-  saleLines: async (date) => mockLines(date),
+  objects: async () => MOCK_OBJECTS,
+  salesByGroup: async (from, to) => daysBetween(from, to).flatMap((day) => MOCK_OBJECTS.flatMap((o) =>
+    mockLines(day, o.id).map((l) => ({ day, objectId: o.id, groupId: l.groupId, amount: l.amount })))),
+  saleLines: async (date, objectIds) => MOCK_OBJECTS.filter((o) => !objectIds || objectIds.includes(o.id)).flatMap((o) => mockLines(date, o.id)),
 };
