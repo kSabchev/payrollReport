@@ -159,6 +159,7 @@
 <body>
 <main>
   <div class="bar">
+    <select class="datepick" id="storePick" aria-label="Магазин" hidden></select>
     <div class="seg" id="modes" role="group" aria-label="Период">
       <button data-mode="day">Ден</button><button data-mode="month">Месец</button>
       <button data-mode="quarter">Тримесечие</button><button data-mode="year">Година</button>
@@ -232,9 +233,20 @@ async function api(path, body) {
 // ------------------------------------------------------------ Състояние
 const S = {
   mode: "month", anchor: fmt(new Date()), from: null, to: null, group: "month", tab: "expense", editCols: false,
-  meta: null, days: [], syncError: null, loading: false, loadedAt: null, histKind: "",
+  meta: null, days: [], syncError: null, loading: false, loadedAt: null, histKind: "", store: localStorage.getItem("store") || "",
 };
 const today = () => fmt(new Date());
+
+// Магазин: id или "all" (сбор, само за четене)
+const readOnly = () => S.store === "all";
+const storeName = (id) => S.meta.stores.find((x) => x.id === id)?.name ?? "";
+const multiStore = () => S.meta.stores.length > 1;
+function fixStore() {
+  const ok = (S.store === "all" && multiStore()) || S.meta.stores.some((x) => x.id === S.store);
+  if (!ok) S.store = S.meta.stores[0].id;
+  localStorage.setItem("store", S.store);
+}
+const curFloat = () => (readOnly() ? null : S.meta.floats[S.store]);
 
 const addDays = (s, n) => { const d = parse(s); d.setDate(d.getDate() + n); return fmt(d); };
 const spanDays = (from, to) => Math.round((parse(to) - parse(from)) / 864e5) + 1;
@@ -294,6 +306,7 @@ async function init() {
     const sess = await api("/api/session");
     if (sess.auth && !sess.user) return showAuth(sess.setup);
     S.meta = await api("/api/state");
+    fixStore();
   }
   catch (e) { $("#view").innerHTML = `<div class="notice">${esc(e.message)}</div>`; return; }
   bindChrome();
@@ -304,8 +317,8 @@ async function load(force) {
   const p = period();
   S.loading = true; updateChrome();
   try {
-    const r = await api(`/api/report?from=${p.from}&to=${p.to}${force ? "&force=1" : ""}`);
-    S.days = r.days; S.syncError = r.syncError; S.meta.mappedColumns = r.mappedColumns; S.meta.float = r.float; S.loadedAt = new Date();
+    const r = await api(`/api/report?from=${p.from}&to=${p.to}&store=${S.store}${force ? "&force=1" : ""}`);
+    S.days = r.days; S.syncError = r.syncError; S.meta.mappedColumns = r.mappedColumns; S.meta.floats = r.floats; S.loadedAt = new Date();
   } catch (e) { S.syncError = e.message; S.days = []; }
   S.loading = false;
   render();
@@ -323,6 +336,11 @@ function updateChrome() {
   $("#grouping").hidden = !canGroup();
   document.querySelectorAll("#grouping button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.group === S.group));
   document.querySelectorAll(".tabs [role=tab]").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === S.tab));
+  const sp = $("#storePick");
+  sp.hidden = !multiStore();
+  sp.innerHTML = (multiStore() ? `<option value="all">Всички магазини</option>` : "") +
+    S.meta.stores.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
+  sp.value = S.store;
   $("#refresh").disabled = S.loading;
   $("#editCols").hidden = S.tab === "settings" || S.tab === "history";
   const u = S.meta.auth?.user;
@@ -359,6 +377,7 @@ function bindChrome() {
   $("#toPick").onchange = pickRange;
   $("#editCols").onclick = () => { S.editCols = !S.editCols; render(); };
   $("#refresh").onclick = () => load(true);
+  $("#storePick").onchange = (e) => { S.store = e.target.value; localStorage.setItem("store", S.store); load(); };
   $("#logout").onclick = async () => { await api("/api/logout", {}).catch(() => {}); location.reload(); };
   document.querySelector(".tabs").onclick = (e) => { const b = e.target.closest("[role=tab]"); if (!b) return; S.tab = b.dataset.tab; render(); };
 }
@@ -373,7 +392,8 @@ function render() {
   // запазване на фокуса между прерисуванията
   const focusKey = document.activeElement?.dataset?.key;
 
-  const notice = S.syncError ? `<div class="notice">${esc(S.syncError)} Показват се запазените данни.</div>` : "";
+  const notice = (S.syncError ? `<div class="notice">${esc(S.syncError)} Показват се запазените данни.</div>` : "") +
+    (readOnly() && (S.tab === "revenue" || S.tab === "expense") ? `<p class="muted" style="margin:8px 2px 0">Сбор от всички магазини. За да въвеждате, изберете магазин горе вляво.</p>` : "");
   let html = "";
   if (S.tab === "revenue") html = revenueTable();
   else if (S.tab === "expense") html = expenseTable();
@@ -410,7 +430,7 @@ function revenueTable() {
   if (!R.length) return `<div class="tablewrap"><div class="empty">Няма данни за периода.</div></div>`;
   const body = R.map((r) => {
     const cells = cols.map((c) => {
-      if (!r.day) return `<td><span class="v">${mOrBlank(sum(r.days, (d) => d.revenue[c.id] || 0))}</span></td>`;
+      if (!r.day || readOnly()) return `<td><span class="v">${mOrBlank(sum(r.days, (d) => d.revenue[c.id] || 0))}</span></td>`;
       const d = r.day, v = d.revenue[c.id] || 0, edited = d.edited.includes(c.id), key = `rev|${d.date}|${c.id}`;
       if (mapped.has(c.id)) {
         const title = edited ? `Ръчна стойност. Microinvest: ${m(d.revenueApi[c.id])}` : "Покажи продажбите от Microinvest";
@@ -432,7 +452,7 @@ function expenseTable() {
   if (!R.length) return `<div class="tablewrap"><div class="empty">Няма данни за периода.</div></div>`;
   const body = R.map((r) => {
     const cells = cols.map((c) => {
-      if (!r.day) return `<td><span class="v">${mOrBlank(sum(r.days, (d) => expVal(d, c)))}</span></td>`;
+      if (!r.day || readOnly()) return `<td><span class="v">${mOrBlank(sum(r.days, (d) => expVal(d, c)))}</span></td>`;
       const d = r.day, key = `exp|${d.date}|${c.id}`;
       if (c.kind === "list") {
         const list = d.expenses[c.id] || [];
@@ -473,7 +493,7 @@ document.addEventListener("change", async (e) => {
       const r = await saveExpense({ date, col, value: n });
       if (r.value === null) delete day.expenses[col]; else day.expenses[col] = r.value;
     } else {
-      await api("/api/revenue", { date, col, value: n });
+      await api("/api/revenue", { store: S.store, date, col, value: n });
       day.revenue[col] = n ?? day.revenueApi[col];
       day.edited = day.edited.filter((x) => x !== col).concat(n === null ? [] : [col]);
     }
@@ -529,7 +549,7 @@ async function openRevenue(date, colId) {
     $("#cancel", root).onclick = closeDialog;
     const save = async (value) => {
       try {
-        await api("/api/revenue", { date, col: colId, value });
+        await api("/api/revenue", { store: S.store, date, col: colId, value });
         day.revenue[colId] = value ?? day.revenueApi[colId];
         day.edited = day.edited.filter((x) => x !== colId).concat(value === null ? [] : [colId]);
         closeDialog(); render();
@@ -541,7 +561,7 @@ async function openRevenue(date, colId) {
   };
   showDialog(form(`<p class="muted">Зареждане на продажбите…</p>`), bind);
   try {
-    const { lines } = await api(`/api/detail?date=${date}&col=${encodeURIComponent(colId)}`);
+    const { lines } = await api(`/api/detail?date=${date}&col=${encodeURIComponent(colId)}&store=${S.store}`);
     const total = lines.reduce((s, l) => s + l.amount, 0);
     const tbl = lines.length
       ? `<div class="scroll"><table><thead><tr><th>Артикул</th><th style="text-align:right">К-во</th><th style="text-align:right">Сума</th><th style="text-align:right">Док. №</th></tr></thead><tbody>
@@ -625,16 +645,21 @@ async function refreshMeta() { S.meta = await api("/api/state"); }
 // Записва разход и обновява остатъка за показания период
 async function saveExpense(body) {
   const p = period();
-  const r = await api("/api/expense", { ...body, from: p.from, to: p.to });
+  const r = await api("/api/expense", { ...body, store: S.store, from: p.from, to: p.to });
   for (const d of S.days) if (d.date in r.balances) d.balance = r.balances[d.date];
-  S.meta.float = r.float;
+  S.meta.floats = r.floats;
   return r;
 }
 
 function renderFloat() {
-  const f = S.meta.float, last = S.days.findLast((d) => d.balance != null);
+  const last = S.days.findLast((d) => d.balance != null);
   $("#sumFloat").textContent = last ? m(last.balance) : "—";
   $("#sumFloat").className = last?.balance < 0 ? "neg" : "";
+  if (readOnly()) {
+    $("#floatInfo").textContent = last ? `към ${short(last.date, true)} · сбор за ${S.meta.stores.length} магазина` : "няма данни за периода";
+    return;
+  }
+  const f = curFloat();
   const reset = last && f.resets.findLast((r) => r.date <= last.date);
   const info = last ? `към ${short(last.date, true)} · оборотни ${m(reset?.amount)}` : "няма данни за периода";
   const edit = S.meta.isAdmin && f.current ? ` · <button class="link" id="editFloat">Промени</button>` : "";
@@ -643,45 +668,108 @@ function renderFloat() {
 
 const monthLabel = (s) => { const d = parse(s); return `${MONTHS[d.getMonth()]} ${d.getFullYear()}`; };
 
-function floatDialog({ title, sub, amount, okLabel, cancelLabel, onOk }) {
+// rows: [{ store, label, amount, note }] — по едно поле за сума на ред
+function floatDialog({ title, sub, rows, okLabel, cancelLabel, onOk }) {
   showDialog(`<h2>${title}</h2><p class="sub">${sub}</p>
-    <div class="row"><label for="famount" style="flex:0 0 auto">Оборотни пари</label>
-      <input id="famount" class="field amount" inputmode="decimal" value="${m(amount)}"></div>
+    ${rows.map((r, i) => `<div class="row"><label for="famount${i}" style="flex:1">${esc(r.label)}${r.note ? `<br><span class="muted">${esc(r.note)}</span>` : ""}</label>
+      <input id="famount${i}" class="field amount" inputmode="decimal" value="${m(r.amount)}"></div>`).join("")}
     <div class="actions"><button class="ghost" id="cancel">${cancelLabel}</button><button class="primary" id="ok">${okLabel}</button></div>`, (root) => {
     $("#cancel", root).onclick = closeDialog;
     const ok = async () => {
-      const n = toNum($("#famount", root).value);
-      if (n === null || Number.isNaN(n) || n < 0) return alert("Въведете сума");
-      try { await onOk(n); closeDialog(); load(); } catch (err) { alert(err.message); }
+      const amounts = rows.map((_, i) => toNum($(`#famount${i}`, root).value));
+      if (amounts.some((n) => n === null || Number.isNaN(n) || n < 0)) return alert("Въведете сума");
+      try { for (let i = 0; i < rows.length; i++) await onOk(rows[i].store, amounts[i]); closeDialog(); load(); }
+      catch (err) { alert(err.message); }
     };
     $("#ok", root).onclick = ok;
-    $("#famount", root).onkeydown = (e) => { if (e.key === "Enter") ok(); };
+    root.querySelectorAll("input").forEach((inp) => (inp.onkeydown = (e) => { if (e.key === "Enter") ok(); }));
   });
-  setTimeout(() => $("#famount")?.select(), 0);
+  setTimeout(() => $("#famount0")?.select(), 0);
 }
 
 function openFloat() {
-  const c = S.meta.float.current;
+  const f = curFloat(), c = f.current;
   floatDialog({
-    title: "Оборотни пари", sub: `За ${monthLabel(c.date)}, от ${short(c.date, true)}. Остатъкът се преизчислява от тази дата.`,
-    amount: c.amount, okLabel: "Запази", cancelLabel: "Отказ",
-    onOk: (amount) => api("/api/float", { action: "set", amount }),
+    title: multiStore() ? `Оборотни пари · ${esc(f.name)}` : "Оборотни пари",
+    sub: `За ${monthLabel(c.date)}, от ${short(c.date, true)}. Остатъкът се преизчислява от тази дата.`,
+    rows: [{ store: f.store, label: "Оборотни пари", amount: c.amount }], okLabel: "Запази", cancelLabel: "Отказ",
+    onOk: (store, amount) => api("/api/float", { store, action: "set", amount }),
   });
 }
 
-// Нулиране в началото на месеца: пита се веднъж на сесия, докато админ не потвърди (на 1-во или 2-ро число)
+// Нулиране в началото на месеца за всички магазини, които още не са нулирани.
+// Пита се веднъж на сесия, докато админ не потвърди (на 1-во или 2-ро число).
 function askFloatReset() {
-  const f = S.meta.float, p = f?.pendingReset;
-  if (!S.meta.isAdmin || !p || dlg.open) return;
-  const key = "floatResetLater:" + p.date;
+  const pending = Object.values(S.meta.floats || {}).filter((f) => f.pendingReset);
+  if (!S.meta.isAdmin || !pending.length || dlg.open) return;
+  const key = "floatResetLater:" + pending[0].pendingReset.date;
   if (sessionStorage.getItem(key)) return;
   sessionStorage.setItem(key, "1");
-  const bal = f.balance != null ? ` Остатък в момента: ${m(f.balance)}.` : "";
   floatDialog({
-    title: "Нулиране на оборотните пари", sub: `Започва ${monthLabel(p.date)}. Да започне ли месецът с нова сума?${bal}`,
-    amount: f.default, okLabel: "Нулирай", cancelLabel: "По-късно",
-    onOk: (amount) => api("/api/float", { action: "reset", amount }),
+    title: "Нулиране на оборотните пари",
+    sub: `Започва ${monthLabel(pending[0].pendingReset.date)}. Да започне ли месецът с нова сума?`,
+    rows: pending.map((f) => ({ store: f.store, label: multiStore() ? f.name : "Оборотни пари", amount: f.default,
+      note: f.balance != null ? `остатък в момента ${m(f.balance)}` : "" })),
+    okLabel: "Нулирай", cancelLabel: "По-късно",
+    onOk: (store, amount) => api("/api/float", { store, action: "reset", amount }),
   });
+}
+
+// ------------------------------------------------------------ Магазини (Настройки)
+function objectLabel(id) {
+  if (id == null) return "всички обекти";
+  const o = (S.meta.objects || []).find((x) => x.id === id);
+  return o ? `${o.name} (${o.id})` : `обект ${id}`;
+}
+
+function storesSettings() {
+  const err = S.meta.objectsError;
+  return `<h3>Магазини</h3>
+    <p class="help">Всеки магазин е обект в Microinvest. Разходите, ръчните приходи и оборотните пари са отделни за всеки магазин;
+      колоните и групите са общи. Горе вляво се избира магазин или „Всички магазини“ (сбор, само за преглед).</p>
+    ${err ? `<p class="err">Списъкът с обекти не се зарежда: ${esc(err)} Дайте права в SQL Server Management Studio:
+      <code>GRANT SELECT ON dbo.Objects TO [payroll_report];</code> Дотогава въвеждайте номера (ID) на обекта.</p>` : ""}
+    <table class="maptable"><thead><tr><th>Магазин</th><th>Обект в Microinvest</th><th>Оборотни по подразбиране</th><th></th></tr></thead><tbody>
+    ${S.meta.stores.map((st) => `<tr><td>${esc(st.name)}</td><td>${esc(objectLabel(st.objectId))}</td><td>${m(st.floatDefault)}</td>
+      <td><button class="ghost" data-storeedit="${esc(st.id)}">Промени</button>
+        ${multiStore() ? `<button class="ghost" data-storedel="${esc(st.id)}" ${st.hasData ? `disabled title="Има въведени разходи или ръчни приходи"` : ""}>Изтрий</button>` : ""}</td></tr>`).join("")}
+    </tbody></table>
+    <div class="actions" style="justify-content:flex-start;margin-top:8px"><button class="ghost" id="addStore">+ Нов магазин</button></div>`;
+}
+
+// Без id — нов магазин
+function openStore(id) {
+  const st = id ? S.meta.stores.find((x) => x.id === id) : null;
+  const objects = S.meta.objects || [];
+  // „Всички обекти“ има смисъл само при един магазин
+  const allowAll = !st ? false : S.meta.stores.length === 1;
+  const objField = objects.length
+    ? `<select class="field" id="stObj">${allowAll ? `<option value="">— всички обекти —</option>` : `<option value="">— изберете —</option>`}
+        ${objects.map((o) => `<option value="${o.id}" ${st?.objectId === o.id ? "selected" : ""}>${esc(o.name)} (${o.id})</option>`).join("")}</select>`
+    : `<input class="field" id="stObj" inputmode="numeric" placeholder="ID на обекта${allowAll ? " (празно = всички)" : ""}" value="${st?.objectId ?? ""}">`;
+  const needsObj = !st && S.meta.stores.some((x) => x.objectId == null);
+  showDialog(`<h2>${st ? `Магазин „${esc(st.name)}“` : "Нов магазин"}</h2>
+    ${needsObj ? `<p class="sub">Първо изберете обект за „${esc(S.meta.stores.find((x) => x.objectId == null).name)}“, после добавете нов магазин.</p>` : ""}
+    <div class="form" style="grid-template-columns:150px 1fr;margin-top:10px">
+      <label for="stName">Име</label><input class="field" id="stName" value="${esc(st?.name ?? "")}">
+      <label for="stObj">Обект в Microinvest</label>${objField}
+      <label for="stFloat">Оборотни пари</label><input class="field amount" id="stFloat" inputmode="decimal" value="${m(st?.floatDefault ?? 8500)}">
+    </div>
+    <p class="muted" style="margin:8px 0 0">Оборотните пари тук са сумата, предлагана при нулиране всеки месец.
+      Сумата за текущия месец се сменя с „Промени“ горе.</p>
+    <div class="actions"><button class="ghost" id="cancel">Отказ</button><button class="primary" id="ok">${st ? "Запази" : "Добави"}</button></div>`, (root) => {
+    $("#cancel", root).onclick = closeDialog;
+    $("#ok", root).onclick = async () => {
+      const floatDefault = toNum($("#stFloat", root).value);
+      if (floatDefault === null || Number.isNaN(floatDefault)) return alert("Въведете сума на оборотните пари");
+      const body = { name: $("#stName", root).value, objectId: $("#stObj", root).value, floatDefault };
+      try {
+        await api("/api/stores", st ? { action: "update", id: st.id, ...body } : { action: "add", ...body });
+        closeDialog(); await refreshMeta(); fixStore(); load();
+      } catch (err) { alert(err.message); }
+    };
+  });
+  setTimeout(() => $("#stName")?.focus(), 0);
 }
 
 // ------------------------------------------------------------ История
@@ -811,11 +899,12 @@ function settingsView() {
     <h3>Връзка с базата на Microinvest Склад Про</h3>
     ${connHelp(S.meta.connection)}
     <div class="form">
-      <label for="sObj">Обект (ID)</label><input class="field" id="sObj" value="${s.objectId ?? ""}" placeholder="празно = всички обекти">
       <label for="sTypes">Типове операции</label><input class="field" id="sTypes" value="${s.operationTypes.join(", ")}" title="2 = Продажба">
       <label for="sVat">Суми</label><label><input type="checkbox" id="sVat" ${s.withVat ? "checked" : ""}> с ДДС</label>
     </div>
     <div class="actions" style="justify-content:flex-start"><button class="primary" id="saveConn">Запази и провери</button><span id="connMsg" class="muted"></span></div>
+
+    ${storesSettings()}
 
     <h3>Групи артикули → колони в Приходи</h3>
     <p class="help">Всяка продажба отива в колоната на групата на артикула. Подгрупите наследяват колоната на родителската група. Продажбите от групи без избрана колона отиват в:
@@ -852,13 +941,21 @@ document.addEventListener("click", async (e) => {
     const msg = $("#connMsg");
     msg.textContent = "Проверка…"; msg.className = "muted";
     try {
-      await api("/api/settings", { objectId: $("#sObj").value, operationTypes: $("#sTypes").value, withVat: $("#sVat").checked });
+      await api("/api/settings", { operationTypes: $("#sTypes").value, withVat: $("#sVat").checked });
       await refreshMeta();
       if (S.meta.catalogError) throw new Error(S.meta.catalogError);
       render();
       $("#connMsg").textContent = `Връзката работи. Групи: ${S.meta.groups.length}.`;
       load();
     } catch (err) { render(); $("#connMsg").textContent = err.message; $("#connMsg").className = "err"; }
+  }
+  if (e.target.id === "addStore") openStore();
+  if (e.target.dataset?.storeedit) openStore(e.target.dataset.storeedit);
+  if (e.target.dataset?.storedel) {
+    const st = S.meta.stores.find((x) => x.id === e.target.dataset.storedel);
+    if (!confirm(`Да изтрия ли магазина „${st.name}“?`)) return;
+    try { await api("/api/stores", { action: "delete", id: st.id }); await refreshMeta(); fixStore(); load(); }
+    catch (err) { alert(err.message); }
   }
   if (e.target.id === "addUser") openUser();
   if (e.target.dataset?.userpw) openUser(e.target.dataset.userpw);
