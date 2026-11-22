@@ -9,7 +9,8 @@
   },
   "scripts": {
     "start": "node server.js",
-    "demo": "node -e \"process.env.MOCK='1';require('./server.js')\""
+    "demo": "node -e \"process.env.MOCK='1';require('./server.js')\"",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "mssql": "^11.0.2"

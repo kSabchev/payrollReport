@@ -12,9 +12,11 @@ try { process.loadEnvFile(path.join(__dirname, ".env")); } catch {}
 const MOCK = process.env.MOCK === "1";
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || undefined; // 127.0.0.1 = само от този компютър (напр. зад tailscale serve)
-const DATA_FILE = path.join(__dirname, MOCK ? "data-demo.json" : "data.json");
-const HISTORY_DIR = path.join(__dirname, MOCK ? "history-demo" : "history");
-const BACKUP_DIR = path.join(__dirname, "backups");
+// Папка за данните, историята и копията (по подразбиране до server.js; тестовете ползват временна)
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : __dirname;
+const DATA_FILE = path.join(DATA_DIR, MOCK ? "data-demo.json" : "data.json");
+const HISTORY_DIR = path.join(DATA_DIR, MOCK ? "history-demo" : "history");
+const BACKUP_DIR = path.join(DATA_DIR, "backups");
 const BACKUP_KEEP_DAYS = 30;
 const RECENT_DAYS = 3; // последните N дни винаги се презареждат от базата
 
@@ -851,7 +853,7 @@ dailyBackup();
 setInterval(dailyBackup, 60 * 60 * 1000).unref();
 
 server.listen(PORT, HOST, () => {
-  console.log(`Отчет: http://${HOST || "localhost"}:${PORT}`);
+  console.log(`Отчет: http://${HOST || "localhost"}:${server.address().port}`);
   const c = connectionInfo();
   console.log(MOCK ? "Демо режим с примерни данни" : c.configured ? `Microinvest: ${c.server}, база ${c.database}, потребител ${c.user}`
     : "Внимание: връзката с базата не е настроена (вижте .env.example)");
