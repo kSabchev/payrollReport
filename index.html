@@ -4,18 +4,31 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Отчет</title>
+<script>
+  // Тема: "light", "dark" или без избор (следва системата). Задава се преди рисуването, без премигване.
+  (function () {
+    const saved = localStorage.getItem("theme");
+    const dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+  })();
+</script>
 <style>
   :root {
     --bg: #eef1f4; --surface: #ffffff; --ink: #18212b; --muted: #66717f; --line: #dde2e8;
     --rev: #1e7a4f; --exp: #b4342d; --accent: #2457a6; --weekend: #f6f8fa; --hover: #eaf0f8;
     --edited: #c27a00; --input: #fbfcfd; color-scheme: light;
+    --grid: #edf0f3; --warn: #b7791f; --total: #f4f7fb;
+    /* цветове на колоните в Приходи (и после в графиките) */
+    --c-service: #d97706; --c-prima: #0e9384; --c-phones: #7c3aed; --c-goods: #2563eb;
+    --c-5: #db2777; --c-6: #65a30d; --c-7: #0891b2;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #12161b; --surface: #1a2028; --ink: #e5e9ee; --muted: #929cab; --line: #2b333e;
-      --rev: #5cc493; --exp: #f08a80; --accent: #86adf0; --weekend: #1e252e; --hover: #223047;
-      --edited: #f0b44c; --input: #161b22; color-scheme: dark;
-    }
+  :root[data-theme=dark] {
+    --bg: #12161b; --surface: #1a2028; --ink: #e5e9ee; --muted: #929cab; --line: #2b333e;
+    --rev: #5cc493; --exp: #f08a80; --accent: #86adf0; --weekend: #1e252e; --hover: #223047;
+    --edited: #f0b44c; --input: #161b22; color-scheme: dark;
+    --grid: #232a33; --warn: #e5b45a; --total: #1e2530;
+    --c-service: #f5a524; --c-prima: #2dd4bf; --c-phones: #a78bfa; --c-goods: #60a5fa;
+    --c-5: #f472b6; --c-6: #a3e635; --c-7: #22d3ee;
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -30,7 +43,7 @@
   .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
   .seg button { border: 0; background: none; padding: 6px 12px; border-radius: 6px; color: var(--muted); }
   .seg button[aria-pressed=true] { background: var(--accent); color: #fff; }
-  @media (prefers-color-scheme: dark) { .seg button[aria-pressed=true] { color: #0d1522; } }
+  :root[data-theme=dark] .seg button[aria-pressed=true] { color: #0d1522; }
   .nav { display: inline-flex; align-items: center; gap: 4px; }
   .nav .arrow { width: 32px; height: 32px; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; }
   .period { font-size: 20px; font-weight: 600; min-width: 210px; text-align: center; }
@@ -77,16 +90,31 @@
   thead th:first-child, tbody th, tfoot th { position: sticky; left: 0; z-index: 1; background: inherit; text-align: left; }
   thead th:first-child { z-index: 3; background: var(--surface); }
   tbody tr { background: var(--surface); }
-  tbody tr.weekend { background: var(--weekend); }
-  tbody tr.today th { box-shadow: inset 3px 0 0 var(--accent); }
+  tbody tr.sunday { background: var(--weekend); }
+  tbody tr.sunday th button { color: var(--muted); }
+  tbody tr.today { background: color-mix(in srgb, var(--accent) 9%, var(--surface)); }
+  tbody tr.today th { box-shadow: inset 3px 0 0 var(--accent); font-weight: 600; }
+  tbody tr:hover { background: var(--hover); }
   tbody tr.future { color: var(--muted); }
   tbody th { font-weight: 400; padding: 0 10px; }
   tbody th button { border: 0; background: none; padding: 7px 0; text-align: left; width: 100%; }
   tbody th button:hover { color: var(--accent); text-decoration: underline; }
   td { text-align: right; min-width: 96px; }
   td.total, th.total { font-weight: 600; }
+
+  /* Таблиците Разходи и Приходи: контур между клетките, цветни колони, фон според сумата */
+  table.grid td, table.grid thead th + th, table.grid tfoot td { border-left: 1px solid var(--grid); }
+  table.grid tbody td.total { background: color-mix(in srgb, var(--total) 70%, transparent); }
+  table.grid thead th.col { box-shadow: inset 0 3px 0 var(--col); }
+  table.grid thead th.col::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--col); margin-right: 6px; vertical-align: 1px; }
+  table.grid td.heat-rev { background: color-mix(in srgb, var(--rev) var(--t), transparent); }
+  table.grid td.heat-exp { background: color-mix(in srgb, var(--exp) var(--t), transparent); }
+  table.grid tfoot td, table.grid tfoot th { border-top: 2px solid color-mix(in srgb, var(--accent) 55%, var(--line)); background: var(--total); }
+  td.bal-low { color: var(--warn); font-weight: 600; }
+  td.bal-neg { color: var(--exp); font-weight: 600; }
   td .v { padding: 7px 10px; display: block; }
-  td input { width: 100%; min-width: 90px; border: 0; background: transparent; box-shadow: inset 0 -1px 0 var(--line); text-align: right; padding: 7px 10px; }
+  td input { width: 100%; min-width: 90px; border: 0; background: transparent; text-align: right; padding: 7px 10px; }
   td input:hover { background: var(--input); box-shadow: inset 0 0 0 1px var(--line); }
   td input:focus { background: var(--input); box-shadow: inset 0 0 0 2px var(--accent); outline: none; }
   td button.cell { width: 100%; border: 0; background: transparent; text-align: right; padding: 7px 10px; }
@@ -119,7 +147,7 @@
   .row .amount { flex: 0 0 120px; text-align: right; }
   .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
   .primary { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 16px; }
-  @media (prefers-color-scheme: dark) { .primary { color: #0d1522; } }
+  :root[data-theme=dark] .primary { color: #0d1522; }
   .danger { color: var(--exp); border: 1px solid var(--line); background: none; border-radius: 8px; padding: 8px 14px; margin-right: auto; }
   .x { border: 0; background: none; color: var(--muted); font-size: 18px; width: 30px; }
   .x:hover { color: var(--exp); }
@@ -149,6 +177,7 @@
   .who { color: var(--muted); font-size: 13px; }
   .topright { margin-left: auto; display: inline-flex; align-items: center; gap: 12px; }
   .pages { display: inline-flex; gap: 6px; }
+  #themeBtn { width: 34px; padding: 6px 0; text-align: center; }
   .pages button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .history td, .history th { text-align: left; white-space: normal; padding: 7px 10px; vertical-align: top; }
   .history td.time { white-space: nowrap; color: var(--muted); min-width: 0; }
@@ -192,6 +221,7 @@
       <button data-group="day">По дни</button><button data-group="month">По месеци</button>
     </div>
     <span class="topright">
+      <button class="ghost" id="themeBtn" type="button"></button>
       <span class="pages" role="group" aria-label="Страници">
         <button class="ghost" data-tab="history">История</button><button class="ghost" data-tab="settings">Настройки</button>
       </span>
@@ -221,6 +251,22 @@
 <dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
 
 <script>
+// ------------------------------------------------------------ Тема
+// Изборът се пази на устройството; докато няма избор, темата следва системата
+function setTheme(theme) {
+  localStorage.setItem("theme", theme);
+  applyTheme();
+}
+function applyTheme() {
+  const saved = localStorage.getItem("theme");
+  const dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  const b = document.getElementById("themeBtn");
+  if (b) { b.textContent = dark ? "☀" : "☾"; b.title = dark ? "Светла тема" : "Тъмна тема"; b.setAttribute("aria-label", b.title); }
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+applyTheme();
+
 // ------------------------------------------------------------ Помощни
 const $ = (s, r = document) => r.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -397,6 +443,7 @@ function bindChrome() {
     if (b.dataset.sum === "float") openFloat(); else { S.tab = b.dataset.sum; render(); }
   };
   $("#refresh").onclick = () => load(true);
+  $("#themeBtn").onclick = () => { setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"); };
   $("#storePick").onchange = (e) => { S.store = e.target.value; localStorage.setItem("store", S.store); load(); };
   $("#logout").onclick = async () => { await api("/api/logout", {}).catch(() => {}); location.reload(); };
   document.querySelector(".tabs").onclick = (e) => { const b = e.target.closest("[role=tab]"); if (!b) return; S.tab = b.dataset.tab; render(); };
@@ -441,32 +488,50 @@ function rowHead(r) {
 function rowClass(r) {
   if (!r.day) return "";
   const d = parse(r.key), c = [];
-  if (d.getDay() === 0 || d.getDay() === 6) c.push("weekend");
+  if (d.getDay() === 0) c.push("sunday"); // съботата е работен ден
   if (r.key === today()) c.push("today");
   if (r.key > today()) c.push("future");
   return c.join(" ");
 }
 // Колоните се добавят, преименуват, подреждат и трият в Настройки → Колони
-const colHead = (table, c) => `<th>${esc(c.name)}</th>`;
+// Колоните в Приходи имат постоянен цвят; новите колони взимат следващия свободен
+const COL_COLORS = { service: "--c-service", prima: "--c-prima", phones: "--c-phones", goods: "--c-goods" };
+const EXTRA_COLORS = ["--c-5", "--c-6", "--c-7"];
+function colColor(c) {
+  if (COL_COLORS[c.id]) return `var(${COL_COLORS[c.id]})`;
+  const extra = revCols().filter((x) => !COL_COLORS[x.id]).findIndex((x) => x.id === c.id);
+  return `var(${EXTRA_COLORS[Math.max(0, extra) % EXTRA_COLORS.length]})`;
+}
+const colHead = (table, c) => table === "revenue"
+  ? `<th class="col" style="--col:${colColor(c)}">${esc(c.name)}</th>` : `<th>${esc(c.name)}</th>`;
 const addHead = () => `<th></th>`;
+
+// Фон според сумата: колкото по-голяма спрямо най-голямата в колоната, толкова по-наситен
+function heatMax(R, f) { return Math.max(0, ...R.map((r) => sum(r.days, f))); }
+function heat(v, max, kind) {
+  if (!(v > 0) || !(max > 0)) return { cls: "", style: "" };
+  return { cls: `heat-${kind}`, style: ` style="--t:${(4 + 22 * v / max).toFixed(1)}%"` };
+}
 
 function revenueTable() {
   const cols = revCols(), mapped = new Set(S.meta.mappedColumns), R = rows();
   if (!R.length) return `<div class="tablewrap"><div class="empty">Няма данни за периода.</div></div>`;
+  const max = Object.fromEntries(cols.map((c) => [c.id, heatMax(R, (d) => d.revenue[c.id] || 0)]));
   const body = R.map((r) => {
     const cells = cols.map((c) => {
-      if (!r.day || readOnly()) return `<td><span class="v">${mOrBlank(sum(r.days, (d) => d.revenue[c.id] || 0))}</span></td>`;
+      const h = heat(sum(r.days, (d) => d.revenue[c.id] || 0), max[c.id], "rev");
+      if (!r.day || readOnly()) return `<td class="${h.cls}"${h.style}><span class="v">${mOrBlank(sum(r.days, (d) => d.revenue[c.id] || 0))}</span></td>`;
       const d = r.day, v = d.revenue[c.id] || 0, edited = d.edited.includes(c.id), key = `rev|${d.date}|${c.id}`;
       if (mapped.has(c.id)) {
         const title = edited ? `Ръчна стойност. Microinvest: ${m(d.revenueApi[c.id])}` : "Покажи продажбите от Microinvest";
-        return `<td class="${edited ? "edited" : ""}"><button class="cell" data-key="${key}" data-revdetail="${d.date}|${c.id}" title="${title}">${mOrBlank(v) || (edited ? "0,00" : "&nbsp;")}</button></td>`;
+        return `<td class="${edited ? "edited" : ""} ${h.cls}"${h.style}><button class="cell" data-key="${key}" data-revdetail="${d.date}|${c.id}" title="${title}">${mOrBlank(v) || (edited ? "0,00" : "&nbsp;")}</button></td>`;
       }
-      return `<td><input data-key="${key}" data-rev="${d.date}|${c.id}" inputmode="decimal" value="${v ? m(v) : ""}" aria-label="${esc(c.name)} ${d.date}"></td>`;
+      return `<td class="${h.cls}"${h.style}><input data-key="${key}" data-rev="${d.date}|${c.id}" inputmode="decimal" value="${v ? m(v) : ""}" aria-label="${esc(c.name)} ${d.date}"></td>`;
     }).join("");
     return `<tr class="${rowClass(r)}">${rowHead(r)}<td class="total"><span class="v">${m(sum(r.days, revTotal))}</span></td>${cells}<td></td></tr>`;
   }).join("");
   const foot = cols.map((c) => `<td>${m(sum(S.days, (d) => d.revenue[c.id] || 0))}</td>`).join("");
-  return `<div class="tablewrap"><table>
+  return `<div class="tablewrap"><table class="grid">
     <thead><tr><th>${byGroupRows() ? "Месец" : "Дата"}</th><th class="total">Обща стойност</th>${cols.map((c) => colHead("revenue", c)).join("")}${addHead("revenue")}</tr></thead>
     <tbody>${body}</tbody>
     <tfoot><tr><th>Общо</th><td>${m(sum(S.days, revTotal))}</td>${foot}<td></td></tr></tfoot></table></div>`;
@@ -475,33 +540,49 @@ function revenueTable() {
 function expenseTable() {
   const cols = expCols(), R = rows();
   if (!R.length) return `<div class="tablewrap"><div class="empty">Няма данни за периода.</div></div>`;
+  const max = Object.fromEntries(cols.map((c) => [c.id, heatMax(R, (d) => expVal(d, c))]));
   const body = R.map((r) => {
     const cells = cols.map((c) => {
-      if (!r.day || readOnly()) return `<td><span class="v">${mOrBlank(sum(r.days, (d) => expVal(d, c)))}</span></td>`;
+      const h = heat(sum(r.days, (d) => expVal(d, c)), max[c.id], "exp");
+      if (!r.day || readOnly()) return `<td class="${h.cls}"${h.style}><span class="v">${mOrBlank(sum(r.days, (d) => expVal(d, c)))}</span></td>`;
       const d = r.day, key = `exp|${d.date}|${c.id}`;
       if (c.kind === "list") {
         const list = d.expenses[c.id] || [];
         const title = list.length ? list.map((i) => `${i.name || "—"}: ${m(i.value)}`).join("\n") : "Добави разходи с име и стойност";
-        return `<td><button class="cell" data-key="${key}" data-explist="${d.date}|${c.id}" title="${esc(title)}">${list.length ? m(expVal(d, c)) + (list.length > 1 ? ` <span class="muted">(${list.length})</span>` : "") : "&nbsp;"}</button></td>`;
+        return `<td class="${h.cls}"${h.style}><button class="cell" data-key="${key}" data-explist="${d.date}|${c.id}" title="${esc(title)}">${list.length ? m(expVal(d, c)) + (list.length > 1 ? ` <span class="muted">(${list.length})</span>` : "") : "&nbsp;"}</button></td>`;
       }
       const v = d.expenses[c.id];
-      return `<td><input data-key="${key}" data-exp="${d.date}|${c.id}" inputmode="decimal" value="${v != null ? m(v) : ""}" aria-label="${esc(c.name)} ${d.date}"></td>`;
+      return `<td class="${h.cls}"${h.style}><input data-key="${key}" data-exp="${d.date}|${c.id}" inputmode="decimal" value="${v != null ? m(v) : ""}" aria-label="${esc(c.name)} ${d.date}"></td>`;
     }).join("");
     return `<tr class="${rowClass(r)}">${rowHead(r)}<td class="total"><span class="v">${m(sum(r.days, expTotal))}</span></td>${balCell(r.days)}${cells}<td></td></tr>`;
   }).join("");
   const foot = cols.map((c) => `<td>${m(sum(S.days, (d) => expVal(d, c)))}</td>`).join("");
   const endBal = lastBalance(S.days);
-  return `<div class="tablewrap"><table>
+  return `<div class="tablewrap"><table class="grid">
     <thead><tr><th>${byGroupRows() ? "Месец" : "Дата"}</th><th class="total">Общо</th><th title="Оборотни пари минус разходите от началото на месеца">Остатък</th>${cols.map((c) => colHead("expense", c)).join("")}${addHead("expense")}</tr></thead>
     <tbody>${body}</tbody>
-    <tfoot><tr><th>Общо</th><td>${m(sum(S.days, expTotal))}</td><td class="${endBal < 0 ? "neg" : ""}">${endBal == null ? "" : m(endBal)}</td>${foot}<td></td></tr></tfoot></table></div>`;
+    <tfoot><tr><th>Общо</th><td>${m(sum(S.days, expTotal))}</td><td class="${balClass(S.days)}">${endBal == null ? "" : m(endBal)}</td>${foot}<td></td></tr></tfoot></table></div>`;
 }
 
 // Остатък в края на последния ден с изчислена стойност
 const lastBalance = (days) => days.findLast((d) => d.balance != null)?.balance ?? null;
+// Оборотните пари, валидни за деня (при „Всички“ — сборът на магазините)
+function floatAmountOn(date) {
+  const fl = readOnly() ? Object.values(S.meta.floats || {}) : [curFloat()].filter(Boolean);
+  return fl.reduce((s, f) => s + (f.resets.findLast((r) => r.date <= date)?.amount || 0), 0);
+}
+// Остатък: червено под нулата, жълто под 20% от оборотните пари
+function balClass(days) {
+  const d = days.findLast((x) => x.balance != null);
+  if (!d) return "muted";
+  if (d.balance < 0) return "bal-neg";
+  const amount = floatAmountOn(d.date);
+  return amount > 0 && d.balance < amount * 0.2 ? "bal-low" : "muted";
+}
 function balCell(days) {
-  const b = lastBalance(days);
-  return `<td class="${b < 0 ? "neg" : "muted"}"><span class="v">${b == null ? "" : m(b)}</span></td>`;
+  const b = lastBalance(days), cls = balClass(days);
+  const title = cls === "bal-low" ? ` title="Остават под 20% от оборотните пари"` : cls === "bal-neg" ? ` title="Разходите надвишават оборотните пари"` : "";
+  return `<td class="${cls}"${title}><span class="v">${b == null ? "" : m(b)}</span></td>`;
 }
 
 // ------------------------------------------------------------ Редакция в таблицата
