@@ -42,13 +42,14 @@
   /* Обобщение */
   .summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line);
     border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 14px; }
-  .summary div { background: var(--surface); padding: 12px 16px; }
+  .summary > button { background: var(--surface); padding: 12px 16px; border: 0; border-radius: 0; text-align: left; display: block; }
+  .summary > button:hover:not(:disabled) { background: var(--hover); }
+  .summary > button:disabled { cursor: default; }
+  .summary > button[aria-current=true] { box-shadow: inset 0 -3px 0 var(--accent); }
   .summary span { display: block; color: var(--muted); font-size: 13px; }
   .summary strong { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .summary .r strong { color: var(--rev); } .summary .e strong { color: var(--exp); }
   .summary small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
-  .summary button.link { border: 0; background: none; padding: 0; color: var(--accent); }
-  .summary button.link:hover { text-decoration: underline; }
   @media (max-width: 600px) { .summary strong { font-size: 18px; } .period { min-width: 0; font-size: 17px; } }
 
   /* Табове */
@@ -60,6 +61,10 @@
   .tabs button.ghost[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
   .tabs .sync { margin-left: auto; align-self: center; font-size: 12px; color: var(--muted); padding-right: 4px; }
 
+  .alert { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 0 0 14px; padding: 10px 14px;
+    background: var(--surface); border: 1px solid var(--exp); border-left-width: 4px; border-radius: 8px; }
+  .alert strong { color: var(--exp); }
+  .alert .actions { margin: 0 0 0 auto; }
   .notice { margin: 10px 0 0; padding: 10px 12px; border-left: 3px solid var(--exp); background: var(--surface); border-radius: 4px; }
 
   /* Таблица */
@@ -69,8 +74,6 @@
   th, td { border-bottom: 1px solid var(--line); padding: 0; white-space: nowrap; }
   thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); text-align: right; font-weight: 600;
     font-size: 13px; color: var(--muted); padding: 9px 10px; border-bottom: 2px solid var(--line); }
-  thead th.colhead { cursor: pointer; }
-  thead th.colhead:hover { color: var(--ink); }
   thead th:first-child, tbody th, tfoot th { position: sticky; left: 0; z-index: 1; background: inherit; text-align: left; }
   thead th:first-child { z-index: 3; background: var(--surface); }
   tbody tr { background: var(--surface); }
@@ -133,11 +136,20 @@
   .maptable { width: auto; min-width: min(560px, 100%); }
   .maptable td, .maptable th { padding: 6px 10px; text-align: left; position: static; }
   .maptable select { border: 1px solid var(--line); background: var(--input); border-radius: 6px; padding: 5px 8px; }
+  details.fold { margin: 22px 0 0; }
+  details.fold > summary { cursor: pointer; font-size: 15px; font-weight: 600; margin-bottom: 6px; list-style: none; }
+  details.fold > summary::-webkit-details-marker { display: none; }
+  details.fold > summary::before { content: "▸"; display: inline-block; width: 1.1em; color: var(--muted); transition: transform .15s; }
+  details.fold[open] > summary::before { transform: rotate(90deg); }
+  details.fold > summary .muted { font-weight: 400; font-size: 13px; margin-left: 6px; }
   .collist { display: flex; flex-wrap: wrap; gap: 6px; }
   .collist button { border: 1px solid var(--line); background: var(--input); border-radius: 6px; padding: 5px 10px; }
 
   /* История */
   .who { color: var(--muted); font-size: 13px; }
+  .topright { margin-left: auto; display: inline-flex; align-items: center; gap: 12px; }
+  .pages { display: inline-flex; gap: 6px; }
+  .pages button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .history td, .history th { text-align: left; white-space: normal; padding: 7px 10px; vertical-align: top; }
   .history td.time { white-space: nowrap; color: var(--muted); min-width: 0; }
   .history td.user { white-space: nowrap; min-width: 0; }
@@ -179,23 +191,26 @@
     <div class="seg" id="grouping" role="group" aria-label="Редове" hidden>
       <button data-group="day">По дни</button><button data-group="month">По месеци</button>
     </div>
-    <span class="spacer"></span>
-    <span class="who"><span id="who"></span><button class="link" id="logout" hidden>Изход</button></span>
+    <span class="topright">
+      <span class="pages" role="group" aria-label="Страници">
+        <button class="ghost" data-tab="history">История</button><button class="ghost" data-tab="settings">Настройки</button>
+      </span>
+      <span class="who"><span id="who"></span><button class="link" id="logout" hidden>Изход</button></span>
+    </span>
   </div>
 
+  <div id="alerts"></div>
+
   <div class="summary">
-    <div class="e"><span>Разходи</span><strong id="sumExp">—</strong></div>
-    <div class="r"><span>Приходи</span><strong id="sumRev">—</strong></div>
-    <div><span>Оборотни − разходи</span><strong id="sumFloat">—</strong><small id="floatInfo"></small></div>
+    <button type="button" class="e" data-sum="expense" title="Към Разходи"><span>Разходи</span><strong id="sumExp">—</strong></button>
+    <button type="button" class="r" data-sum="revenue" title="Към Приходи"><span>Приходи</span><strong id="sumRev">—</strong></button>
+    <button type="button" id="floatCell" data-sum="float"><span>Оборотни − разходи</span><strong id="sumFloat">—</strong><small id="floatInfo"></small></button>
   </div>
 
   <div class="tabs" role="tablist">
     <button role="tab" data-tab="expense">Разходи</button>
     <button role="tab" data-tab="revenue">Приходи</button>
-    <button role="tab" data-tab="history">История</button>
-    <button role="tab" data-tab="settings">Настройки</button>
     <span class="sync" id="syncInfo"></span>
-    <button class="ghost" id="editCols" style="align-self:center;margin-bottom:4px" title="Преименуване, подреждане и добавяне на колони">Редактирай колони</button>
     <button class="ghost" id="refresh" style="align-self:center;margin-bottom:4px">Обнови от Microinvest</button>
   </div>
   <div id="view"></div>
@@ -232,8 +247,8 @@ async function api(path, body) {
 
 // ------------------------------------------------------------ Състояние
 const S = {
-  mode: "month", anchor: fmt(new Date()), from: null, to: null, group: "month", tab: "expense", editCols: false,
-  meta: null, days: [], syncError: null, loading: false, loadedAt: null, histKind: "", store: localStorage.getItem("store") || "",
+  mode: "month", anchor: fmt(new Date()), from: null, to: null, group: "month", tab: "expense",
+  meta: null, days: [], syncError: null, loading: false, loadedAt: null, histKind: "", groupsOpen: false, store: localStorage.getItem("store") || "",
 };
 const today = () => fmt(new Date());
 
@@ -319,9 +334,11 @@ async function load(force) {
   try {
     const r = await api(`/api/report?from=${p.from}&to=${p.to}&store=${S.store}${force ? "&force=1" : ""}`);
     S.days = r.days; S.syncError = r.syncError; S.meta.mappedColumns = r.mappedColumns; S.meta.floats = r.floats; S.loadedAt = new Date();
+    if (r.backup) S.meta.backup = r.backup;
   } catch (e) { S.syncError = e.message; S.days = []; }
   S.loading = false;
   render();
+  askBackupProblem();
   askFloatReset();
 }
 
@@ -336,18 +353,17 @@ function updateChrome() {
   $("#grouping").hidden = !canGroup();
   document.querySelectorAll("#grouping button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.group === S.group));
   document.querySelectorAll(".tabs [role=tab]").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === S.tab));
+  document.querySelectorAll(".pages [data-tab]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.tab === S.tab));
   const sp = $("#storePick");
   sp.hidden = !multiStore();
   sp.innerHTML = (multiStore() ? `<option value="all">Всички магазини</option>` : "") +
     S.meta.stores.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
   sp.value = S.store;
   $("#refresh").disabled = S.loading;
-  $("#editCols").hidden = S.tab === "settings" || S.tab === "history";
   const u = S.meta.auth?.user;
   $("#who").textContent = u ? u.name : "";
   $("#logout").hidden = !u;
-  $("#editCols").setAttribute("aria-pressed", S.editCols);
-  $("#editCols").textContent = S.editCols ? "Готово" : "Редактирай колони";
+  document.querySelectorAll(".summary [data-sum]").forEach((b) => b.setAttribute("aria-current", b.dataset.sum === S.tab));
   $("#syncInfo").textContent = S.loading ? "Зареждане…" : S.loadedAt ? `Обновено ${S.loadedAt.toLocaleTimeString("bg-BG", { hour: "2-digit", minute: "2-digit" })}${S.meta.mock ? " · демо данни" : ""}` : "";
 }
 
@@ -375,16 +391,26 @@ function bindChrome() {
   };
   $("#fromPick").onchange = pickRange;
   $("#toPick").onchange = pickRange;
-  $("#editCols").onclick = () => { S.editCols = !S.editCols; render(); };
+  // Разходи и Приходи горе водят към таблицата; Оборотни − разходи отваря смяната на сумата
+  document.querySelector(".summary").onclick = (e) => {
+    const b = e.target.closest("[data-sum]"); if (!b || b.disabled) return;
+    if (b.dataset.sum === "float") openFloat(); else { S.tab = b.dataset.sum; render(); }
+  };
   $("#refresh").onclick = () => load(true);
   $("#storePick").onchange = (e) => { S.store = e.target.value; localStorage.setItem("store", S.store); load(); };
   $("#logout").onclick = async () => { await api("/api/logout", {}).catch(() => {}); location.reload(); };
   document.querySelector(".tabs").onclick = (e) => { const b = e.target.closest("[role=tab]"); if (!b) return; S.tab = b.dataset.tab; render(); };
+  // История и Настройки са горе вдясно; повторно натискане връща към Разходи
+  document.querySelector(".pages").onclick = (e) => {
+    const b = e.target.closest("[data-tab]"); if (!b) return;
+    S.tab = S.tab === b.dataset.tab ? "expense" : b.dataset.tab; render();
+  };
 }
 
 // ------------------------------------------------------------ Рендиране
 function render() {
   updateChrome();
+  renderAlerts();
   $("#sumRev").textContent = m(sum(S.days, revTotal));
   $("#sumExp").textContent = m(sum(S.days, expTotal));
   renderFloat();
@@ -420,10 +446,9 @@ function rowClass(r) {
   if (r.key > today()) c.push("future");
   return c.join(" ");
 }
-const colHead = (table, c) => S.editCols
-  ? `<th class="colhead" data-colmenu="${table}|${c.id}" tabindex="0" title="Преименуване, подреждане, изтриване">✎ ${esc(c.name)}</th>`
-  : `<th>${esc(c.name)}</th>`;
-const addHead = (table) => S.editCols ? `<th class="add"><button data-addcol="${table}">+ Колона</button></th>` : `<th></th>`;
+// Колоните се добавят, преименуват, подреждат и трият в Настройки → Колони
+const colHead = (table, c) => `<th>${esc(c.name)}</th>`;
+const addHead = () => `<th></th>`;
 
 function revenueTable() {
   const cols = revCols(), mapped = new Set(S.meta.mappedColumns), R = rows();
@@ -513,7 +538,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 document.addEventListener("click", (e) => {
-  const t = e.target.closest("button, th.colhead");
+  const t = e.target.closest("button");
   if (!t) return;
   const d = t.dataset;
   if (d.goday) { S.mode = "day"; S.anchor = d.goday; load(); }
@@ -521,11 +546,7 @@ document.addEventListener("click", (e) => {
   else if (d.revdetail) openRevenue(...d.revdetail.split("|"));
   else if (d.explist) openList(...d.explist.split("|"));
   else if (d.addcol) openAddColumn(d.addcol);
-  else if (t.id === "editFloat") openFloat();
   else if (d.colmenu) openColumn(...d.colmenu.split("|"));
-});
-document.addEventListener("keydown", (e) => {
-  if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("th.colhead")) { e.preventDefault(); openColumn(...e.target.dataset.colmenu.split("|")); }
 });
 
 // ------------------------------------------------------------ Диалози
@@ -533,6 +554,8 @@ const dlg = $("#dlg");
 function showDialog(html, onBind) { $("#dlgBody").innerHTML = html; onBind?.($("#dlgBody")); if (!dlg.open) dlg.showModal(); }
 function closeDialog() { dlg.close(); }
 dlg.addEventListener("click", (e) => { if (e.target === dlg) closeDialog(); });
+// След затваряне на прозорец се показва следващото чакащо предупреждение, ако има
+dlg.addEventListener("close", () => setTimeout(() => { if (S.meta) { askBackupProblem(); askFloatReset(); } }, 0));
 const dateLabel = (s) => { const d = parse(s); return `${WD[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`; };
 
 async function openRevenue(date, colId) {
@@ -585,7 +608,26 @@ function openList(date, colId) {
       <button class="x" data-del="${i}" aria-label="Премахни реда">×</button></div>`).join("")}</div>
     <button class="ghost" id="addLine">+ Ред</button>
     <div class="actions"><button class="ghost" id="cancel">Затвори</button><button class="primary" id="save">Запази</button></div>`, (root) => {
-      root.querySelectorAll("[data-f]").forEach((inp) => inp.oninput = () => { const it = items[inp.dataset.i]; if (inp.dataset.f === "name") it.name = inp.value; else it.value = toNum(inp.value); });
+      root.querySelectorAll("[data-f]").forEach((inp) => inp.oninput = () => { inp.setCustomValidity(""); const it = items[inp.dataset.i]; if (inp.dataset.f === "name") it.name = inp.value; else it.value = toNum(inp.value); });
+      // Enter: от описанието към сумата; от сумата — нов ред, ако сумата е валидна.
+      // Enter на празен последен ред запазва.
+      const field = (i, f) => root.querySelector(`[data-i="${i}"][data-f=${f}]`);
+      root.querySelectorAll("[data-f]").forEach((inp) => inp.onkeydown = (e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        const i = +inp.dataset.i, it = items[i], last = i === items.length - 1;
+        if (last && items.length > 1 && !it.name.trim() && it.value === null) return $("#save", root).click();
+        if (inp.dataset.f === "name") { field(i, "value").focus(); return; }
+        if (it.value === null || Number.isNaN(it.value)) {
+          inp.setCustomValidity(it.value === null ? "Въведете сума" : "Невалидно число");
+          inp.reportValidity();
+          return;
+        }
+        inp.value = m(it.value);
+        if (!last) { field(i + 1, "name").focus(); return; }
+        items.push({ name: "", value: null }); draw();
+        field(items.length - 1, "name")?.focus();
+      });
       root.querySelectorAll("[data-del]").forEach((b) => b.onclick = () => { items.splice(+b.dataset.del, 1); if (!items.length) items.push({ name: "", value: null }); draw(); });
       $("#addLine", root).onclick = () => { items.push({ name: "", value: null }); draw(); root.querySelector(`[data-i="${items.length - 1}"][data-f=name]`)?.focus(); };
       $("#cancel", root).onclick = closeDialog;
@@ -655,15 +697,17 @@ function renderFloat() {
   const last = S.days.findLast((d) => d.balance != null);
   $("#sumFloat").textContent = last ? m(last.balance) : "—";
   $("#sumFloat").className = last?.balance < 0 ? "neg" : "";
+  const cell = $("#floatCell");
   if (readOnly()) {
     $("#floatInfo").textContent = last ? `към ${short(last.date, true)} · сбор за ${S.meta.stores.length} магазина` : "няма данни за периода";
+    cell.disabled = true; cell.title = "Изберете магазин, за да смените оборотните пари";
     return;
   }
   const f = curFloat();
   const reset = last && f.resets.findLast((r) => r.date <= last.date);
-  const info = last ? `към ${short(last.date, true)} · оборотни ${m(reset?.amount)}` : "няма данни за периода";
-  const edit = S.meta.isAdmin && f.current ? ` · <button class="link" id="editFloat">Промени</button>` : "";
-  $("#floatInfo").innerHTML = esc(info) + edit;
+  $("#floatInfo").textContent = last ? `към ${short(last.date, true)} · оборотни ${m(reset?.amount)}` : "няма данни за периода";
+  cell.disabled = !(S.meta.isAdmin && f.current);
+  cell.title = cell.disabled ? "" : "Смяна на оборотните пари за месеца";
 }
 
 const monthLabel = (s) => { const d = parse(s); return `${MONTHS[d.getMonth()]} ${d.getFullYear()}`; };
@@ -775,7 +819,7 @@ function openStore(id) {
 // ------------------------------------------------------------ История
 // Промени от администраторите и четенията от базата за избрания период
 const HIST_KINDS = [["", "Всички"], ["change", "Промени"], ["sync", "Четене от базата"]];
-const WHAT = { sales: "Продажби по групи", groups: "Групи артикули", detail: "Артикули за ден" };
+const WHAT = { sales: "Продажби по групи", groups: "Групи артикули", objects: "Обекти", detail: "Артикули за ден" };
 
 function historyFrame() {
   return `<div class="history-bar"><div class="seg" role="group" aria-label="Вид">
@@ -874,6 +918,56 @@ function openUser(username) {
   setTimeout(() => $(isNew ? "#uName" : "#uPass")?.focus(), 0);
 }
 
+// ------------------------------------------------------------ Резервни копия: предупреждение
+const backupWhen = (b) => (b.at ? new Date(b.at).toLocaleString("bg-BG", { dateStyle: "short", timeStyle: "short" }) : null);
+
+function backupProblemText(b) {
+  const last = backupWhen(b) ? ` Последно успешно копие: ${backupWhen(b)}.` : " Няма нито едно успешно копие.";
+  if (b.problem?.kind === "error") return `Резервното копие на данните не е направено: ${b.problem.message}.${last}`;
+  return `Копието за ${b.problem?.date ? short(b.problem.date, true) : "деня"} в ${b.time} не е направено.${last}`;
+}
+
+// Червена лента над обобщението на всички страници, докато има проблем
+function renderAlerts() {
+  const b = S.meta.backup;
+  $("#alerts").innerHTML = b?.problem ? `<div class="alert" role="alert"><div><strong>Проблем с резервните копия.</strong>
+      ${esc(backupProblemText(b))}</div>
+    <div class="actions"><button class="ghost" data-backupnow>Опитай сега</button><button class="ghost" data-tab-go="settings">Настройки</button></div></div>` : "";
+}
+
+// Изскачащ прозорец веднъж на сесия за всеки нов проблем
+function askBackupProblem() {
+  const b = S.meta.backup;
+  if (!b?.problem || dlg.open) return;
+  const key = "backupProblem:" + (b.problem.message || b.problem.kind) + ":" + today();
+  if (sessionStorage.getItem(key)) return;
+  sessionStorage.setItem(key, "1");
+  showDialog(`<h2>Проблем с резервните копия</h2>
+    <p>${esc(backupProblemText(b))}</p>
+    <p class="muted">Разходите се пазят само в тази програма, затова копието е важно. Проверете дали има място на диска и права за
+      папката <strong>${esc(b.dir)}</strong>. Предупреждението остава горе, докато копието не се направи успешно.</p>
+    <div class="actions"><button class="ghost" id="cancel">Затвори</button><button class="primary" data-backupnow>Опитай сега</button></div>`,
+    (root) => { $("#cancel", root).onclick = closeDialog; });
+}
+
+async function backupNow() {
+  const msg = $("#backupMsg");
+  try {
+    const r = await api("/api/backup", {});
+    S.meta.backup = r.backup;
+    if (dlg.open) closeDialog();
+    render();
+    if ($("#backupMsg")) { $("#backupMsg").textContent = "Копието е направено."; $("#backupMsg").className = "muted"; }
+    else alert("Копието е направено.");
+  } catch (err) {
+    if (dlg.open) closeDialog();
+    await refreshMeta().catch(() => {});
+    render();
+    if (msg && $("#backupMsg")) { $("#backupMsg").textContent = err.message; $("#backupMsg").className = "err"; }
+    else alert(err.message);
+  }
+}
+
 // ------------------------------------------------------------ Настройки
 function accessHelp() {
   const a = S.meta.auth, b = S.meta.backup;
@@ -881,10 +975,11 @@ function accessHelp() {
   let backup = "";
   if (b && !b.mock) {
     const when = b.at ? new Date(b.at).toLocaleString("bg-BG") : null;
-    backup = `<p class="help">Всеки ден се прави копие на данните в <strong>${esc(b.dir)}</strong>. Пазят се последните ${b.keepDays} дни.
-      ${when ? `Последно копие: ${esc(when)} (${esc(b.file)}).` : "Още няма копие."}</p>
-      ${b.error ? `<p class="err">Последното копие не е направено: ${esc(b.error)}</p>` : ""}
-      <div class="actions" style="justify-content:flex-start;margin-top:0"><button class="ghost" id="backupNow">Направи копие сега</button><span id="backupMsg" class="muted"></span></div>`;
+    backup = `<p class="help">Всеки ден в ${esc(b.time)} се прави копие на данните в <strong>${esc(b.dir)}</strong>.
+      Ако програмата не е работила в този час, копието се прави веднага при следващото стартиране. Копията не се трият
+      (в момента: ${b.count}). ${when ? `Последно копие: ${esc(when)} (${esc(b.file)}).` : "Още няма копие."}</p>
+      ${b.problem ? `<p class="err">${esc(backupProblemText(b))}</p>` : ""}
+      <div class="actions" style="justify-content:flex-start;margin-top:0"><button class="ghost" data-backupnow>Направи копие сега</button><span id="backupMsg" class="muted"></span></div>`;
   }
   return `<h3>Акаунти</h3>${access}<h3>Резервни копия</h3>${backup || `<p class="help">В демо режим не се правят копия.</p>`}`;
 }
@@ -898,25 +993,25 @@ function settingsView() {
   return `<div class="settings">
     <h3>Връзка с базата на Microinvest Склад Про</h3>
     ${connHelp(S.meta.connection)}
-    <div class="form">
-      <label for="sTypes">Типове операции</label><input class="field" id="sTypes" value="${s.operationTypes.join(", ")}" title="2 = Продажба">
-      <label for="sVat">Суми</label><label><input type="checkbox" id="sVat" ${s.withVat ? "checked" : ""}> с ДДС</label>
-    </div>
-    <div class="actions" style="justify-content:flex-start"><button class="primary" id="saveConn">Запази и провери</button><span id="connMsg" class="muted"></span></div>
+    <div class="actions" style="justify-content:flex-start;margin-top:0"><button class="ghost" id="saveConn">Провери връзката</button><span id="connMsg" class="muted"></span></div>
 
     ${storesSettings()}
 
-    <h3>Групи артикули → колони в Приходи</h3>
-    <p class="help">Всяка продажба отива в колоната на групата на артикула. Подгрупите наследяват колоната на родителската група. Продажбите от групи без избрана колона отиват в:
-      <select id="sDefault" class="field" style="flex:none;padding:4px 8px">${opts(s.defaultRevenueColumn)}</select></p>
+    <details class="fold" id="groupsFold" ${S.groupsOpen ? "open" : ""}>
+      <summary>Групи артикули → колони в Приходи
+        <span class="muted">${groups.length ? `${groups.length} групи, ${groups.filter((g) => S.meta.groupMap[g.id]).length} с избрана колона` : ""}</span></summary>
+      <p class="help">Всяка продажба отива в колоната на групата на артикула. Подгрупите наследяват колоната на родителската група. Продажбите от групи без избрана колона отиват в:
+        <select id="sDefault" class="field" style="flex:none;padding:4px 8px">${opts(s.defaultRevenueColumn)}</select></p>
+      ${groups.length ? `<table class="maptable"><thead><tr><th>Група в Microinvest</th><th>Колона</th></tr></thead><tbody>
+        ${groups.map((g) => `<tr><td style="padding-left:${10 + level(g) * 20}px">${esc(g.name)} <span class="muted">${esc(g.code)}</span></td>
+          <td><select data-group="${g.id}">${opts(S.meta.groupMap[g.id] || "", true)}</select></td></tr>`).join("")}
+      </tbody></table>` : `<p class="muted">Групите ще се покажат след успешна връзка с Microinvest.</p>`}
+    </details>
     ${S.meta.catalogError ? `<p class="err">${esc(S.meta.catalogError)}</p>` : ""}
-    ${groups.length ? `<table class="maptable"><thead><tr><th>Група в Microinvest</th><th>Колона</th></tr></thead><tbody>
-      ${groups.map((g) => `<tr><td style="padding-left:${10 + level(g) * 20}px">${esc(g.name)} <span class="muted">${esc(g.code)}</span></td>
-        <td><select data-group="${g.id}">${opts(S.meta.groupMap[g.id] || "", true)}</select></td></tr>`).join("")}
-    </tbody></table>` : `<p class="muted">Групите ще се покажат след успешна връзка с Microinvest.</p>`}
 
     <h3>Колони</h3>
-    <p class="help">Натиснете колона, за да я преименувате, преместите или изтриете.</p>
+    <p class="help">Натиснете колона, за да я преименувате, преместите наляво или надясно, или изтриете. С „+ Колона“ се добавя нова.
+      Промените важат за всички магазини.</p>
     <div class="row"><span class="muted" style="width:80px">Приходи</span><div class="collist">${revCols().map((c) => `<button data-colmenu="revenue|${c.id}">${esc(c.name)}</button>`).join("")}<button data-addcol="revenue">+ Колона</button></div></div>
     <div class="row"><span class="muted" style="width:80px">Разходи</span><div class="collist">${expCols().map((c) => `<button data-colmenu="expense|${c.id}">${esc(c.name)}</button>`).join("")}<button data-addcol="expense">+ Колона</button></div></div>
 
@@ -936,12 +1031,15 @@ function connHelp(c) {
     Тези данни се сменят във файла .env на сървъра.</p>`;
 }
 
+// Свитата/разгънатата таблица с групи се помни между прерисуванията
+document.addEventListener("toggle", (e) => { if (e.target.id === "groupsFold") S.groupsOpen = e.target.open; }, true);
+
 document.addEventListener("click", async (e) => {
+  if (e.target.dataset?.tabGo) { S.tab = e.target.dataset.tabGo; render(); return; }
   if (e.target.id === "saveConn") {
     const msg = $("#connMsg");
     msg.textContent = "Проверка…"; msg.className = "muted";
     try {
-      await api("/api/settings", { operationTypes: $("#sTypes").value, withVat: $("#sVat").checked });
       await refreshMeta();
       if (S.meta.catalogError) throw new Error(S.meta.catalogError);
       render();
@@ -965,10 +1063,7 @@ document.addEventListener("click", async (e) => {
     try { const r = await api("/api/users", { action: "delete", username: name }); S.meta.auth.users = r.users; render(); }
     catch (err) { alert(err.message); }
   }
-  if (e.target.id === "backupNow") {
-    try { const r = await api("/api/backup", {}); S.meta.backup = r.backup; render(); $("#backupMsg").textContent = "Копието е направено."; }
-    catch (err) { $("#backupMsg").textContent = err.message; $("#backupMsg").className = "err"; }
-  }
+  if (e.target.dataset?.backupnow !== undefined) backupNow();
   if (e.target.dataset?.histkind !== undefined) { S.histKind = e.target.dataset.histkind; render(); }
   if (e.target.id === "clearCache") {
     if (!confirm("Да изтегля ли наново всички продажби от Microinvest? Ръчните стойности се запазват.")) return;
