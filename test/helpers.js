@@ -7,7 +7,8 @@ const path = require("node:path");
 const ROOT = path.join(__dirname, "..");
 
 // files: { "data.json": съдържание или път за копиране }
-async function startServer({ env = {}, files = {} } = {}) {
+// prepare(dir) — по желание, преди стартиране (напр. стари дати на файлове)
+async function startServer({ env = {}, files = {}, prepare } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "payroll-test-"));
   for (const [name, content] of Object.entries(files)) {
     const target = path.join(dir, name);
@@ -15,6 +16,7 @@ async function startServer({ env = {}, files = {} } = {}) {
     if (typeof content === "string" && fs.existsSync(content)) fs.copyFileSync(content, target);
     else fs.writeFileSync(target, typeof content === "string" ? content : JSON.stringify(content));
   }
+  if (prepare) prepare(dir);
   const proc = spawn(process.execPath, [path.join(ROOT, "server.js")], {
     cwd: dir,
     // Празните стойности не позволяват на евентуален .env да включи истинска база
