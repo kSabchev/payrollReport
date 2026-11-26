@@ -15,11 +15,14 @@
 <script src="js/history.js" defer></script>
 <script src="js/auth.js" defer></script>
 <script src="js/backup.js" defer></script>
+<script src="js/db.js" defer></script>
+<script src="js/stats.js" defer></script>
 <script src="js/settings.js" defer></script>
 <script src="js/main.js" defer></script>
 </head>
 <body>
 <main>
+  <div class="printtitle" id="printTitle"></div>
   <div class="bar">
     <select class="datepick" id="storePick" aria-label="Магазин" hidden></select>
     <div class="seg" id="modes" role="group" aria-label="Период">
@@ -61,8 +64,13 @@
   <div class="tabs" role="tablist">
     <button role="tab" data-tab="expense">Разходи</button>
     <button role="tab" data-tab="revenue">Приходи</button>
+    <button role="tab" data-tab="stats">Статистика</button>
     <span class="sync" id="syncInfo"></span>
-    <button class="ghost" id="refresh" style="align-self:center;margin-bottom:4px">Обнови от Microinvest</button>
+    <span class="actions-row">
+      <button class="ghost" id="exportBtn" title="Отчетът за показания период в Excel">Excel</button>
+      <button class="ghost" id="printBtn" title="Печат или запис като PDF">Печат</button>
+      <button class="ghost" id="refresh">Обнови от Microinvest</button>
+    </span>
   </div>
   <div id="view"></div>
 </main>

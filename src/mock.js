@@ -40,6 +40,17 @@ const mockSource = {
   salesByGroup: async (from, to) => daysBetween(from, to).flatMap((day) => MOCK_OBJECTS.flatMap((o) =>
     mockLines(day, o.id).map((l) => ({ day, objectId: o.id, groupId: l.groupId, amount: l.amount })))),
   saleLines: async (date, objectIds) => MOCK_OBJECTS.filter((o) => !objectIds || objectIds.includes(o.id)).flatMap((o) => mockLines(date, o.id)),
+  async topItems(from, to, objectIds, limit = 15) {
+    const byItem = new Map();
+    for (const day of daysBetween(from, to)) {
+      for (const l of await mockSource.saleLines(day, objectIds)) {
+        const r = byItem.get(l.goodId) || { goodId: l.goodId, name: l.name, code: l.code, groupId: l.groupId, qtty: 0, amount: 0 };
+        r.qtty += l.qtty; r.amount += l.amount;
+        byItem.set(l.goodId, r);
+      }
+    }
+    return [...byItem.values()].sort((a, b) => b.amount - a.amount).slice(0, limit);
+  },
 };
 
 module.exports = { mockSource };

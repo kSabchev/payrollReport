@@ -6,7 +6,7 @@ function showDialog(html, onBind) { $("#dlgBody").innerHTML = html; onBind?.($("
 function closeDialog() { dlg.close(); }
 dlg.addEventListener("click", (e) => { if (e.target === dlg) closeDialog(); });
 // След затваряне на прозорец се показва следващото чакащо предупреждение, ако има
-dlg.addEventListener("close", () => setTimeout(() => { if (S.meta) { askBackupProblem(); askFloatReset(); } }, 0));
+dlg.addEventListener("close", () => setTimeout(() => { if (S.meta) { askBackupProblem(); askDbProblem(); askFloatReset(); } }, 0));
 const dateLabel = (s) => { const d = parse(s); return `${WD[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`; };
 
 async function openRevenue(date, colId) {

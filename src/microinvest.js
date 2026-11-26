@@ -37,19 +37,67 @@ function friendlySqlError(e) {
   return `Грешка от базата: ${e.message}`;
 }
 
+// ---------------------------------------------------------------- Състояние на връзката
+// Връзката е „прекъсната“ само при грешки при свързване (вход, мрежа, таймаут) или липсваща
+// настройка — не при грешка в отделна заявка (напр. липсващи права над една таблица).
+const CONNECTION_ERRORS = new Set(["ELOGIN", "ESOCKET", "ETIMEOUT", "EINSTLOOKUP", "ECONNCLOSED", "ENOTOPEN", "EDRIVER", "ENOTCONFIGURED"]);
+const db = { error: null, since: null, lastOk: data.dbLastOk || null };
+
+function markOk() {
+  const now = new Date().toISOString();
+  if (db.error) logHistory({ kind: "sync", what: "connection", restored: true, text: "Връзката с базата е възстановена" });
+  Object.assign(db, { error: null, since: null, lastOk: now });
+  data.dbLastOk = now; // пази се при следващия запис на данните
+}
+
+function markDown(message) {
+  if (!db.error) {
+    db.since = new Date().toISOString();
+    logHistory({ kind: "sync", what: "connection", error: message });
+  }
+  db.error = message;
+}
+
+function dbStatus() {
+  if (MOCK) return { mock: true };
+  return { configured: connectionInfo().configured, ok: !db.error, error: db.error, since: db.since, lastOk: db.lastOk };
+}
+
 let pool = null;
 async function query(text, params = {}) {
-  if (!connectionInfo().configured) throw new Error("Връзката с базата не е настроена. Попълнете MI_SQL_DATABASE, MI_SQL_USER и MI_SQL_PASSWORD в .env и рестартирайте програмата.");
+  if (!connectionInfo().configured) {
+    const msg = "Връзката с базата не е настроена. Попълнете MI_SQL_DATABASE, MI_SQL_USER и MI_SQL_PASSWORD в .env и рестартирайте програмата.";
+    markDown(msg);
+    throw new Error(msg);
+  }
   try {
     pool ||= new sql.ConnectionPool(sqlConfig()).connect();
     const req = (await pool).request();
     for (const [k, [type, v]] of Object.entries(params)) req.input(k, type, v);
-    return (await req.query(text)).recordset;
+    const rows = (await req.query(text)).recordset;
+    markOk();
+    return rows;
   } catch (e) {
     console.error("SQL:", e.code || "", e.message);
     const p = pool; pool = null; (await p?.catch(() => null))?.close().catch(() => {});
-    throw new Error(friendlySqlError(e));
+    const msg = friendlySqlError(e);
+    if (CONNECTION_ERRORS.has(e.code) || CONNECTION_ERRORS.has(e.originalError?.code)) markDown(msg);
+    throw new Error(msg);
   }
+}
+
+// Проверка на връзката (SELECT 1), без запис в историята освен при промяна на състоянието
+async function checkConnection() {
+  if (MOCK) return dbStatus();
+  try { await query("SELECT 1 AS ok"); } catch {}
+  return dbStatus();
+}
+
+// При стартиране и после на всеки 5 минути, за да се знае „от кога“ няма връзка
+function startConnectionChecks() {
+  if (MOCK) return;
+  setTimeout(checkConnection, 2000).unref();
+  setInterval(checkConnection, 5 * 60 * 1000).unref();
 }
 
 // Датите се подават като параметри от тип date, без превръщане от текст в SQL.
@@ -95,6 +143,18 @@ const sqlSource = {
       FROM Operations o LEFT JOIN Goods g ON g.ID = o.GoodID
       WHERE ${where}
       GROUP BY o.GoodID, g.Name, g.Code, g.GroupID, o.Acct`, params);
+  },
+
+  // Най-продаваните артикули за период: [{ goodId, name, code, groupId, qtty, amount }]
+  topItems(from, to, objectIds, limit = 15) {
+    const { where, params } = salesFilter(from, to, objectIds);
+    params.top = [sql.Int, limit];
+    return query(`SELECT TOP (@top) o.GoodID AS goodId, g.Name AS name, g.Code AS code, g.GroupID AS groupId,
+        SUM(o.Qtty) AS qtty, SUM(${AMOUNT}) AS amount
+      FROM Operations o LEFT JOIN Goods g ON g.ID = o.GoodID
+      WHERE ${where}
+      GROUP BY o.GoodID, g.Name, g.Code, g.GroupID
+      ORDER BY SUM(${AMOUNT}) DESC`, params);
   },
 };
 
@@ -199,4 +259,7 @@ async function syncRange(from, to, force, user) {
   saveData();
 }
 
-module.exports = { connectionInfo, source, fromDb, catalog, loadCatalog, columnForGroup, mappedColumns, syncRange };
+module.exports = {
+  connectionInfo, dbStatus, checkConnection, startConnectionChecks,
+  source, fromDb, catalog, loadCatalog, columnForGroup, mappedColumns, syncRange,
+};

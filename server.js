@@ -8,6 +8,7 @@
 //   backup.js       резервни копия             auth.js      акаунти и сесии
 //   microinvest.js  SQL, групи, продажби       mock.js      демо данни
 //   stores.js       магазини, оборотни пари, отчет по дни
+//   stats.js        статистика                 export.js    отчет в Excel (xlsx.js — файлът)
 //   routes/*.js     API                        http.js      HTTP сървър и статични файлове
 // Страницата е в public/.
 
@@ -15,7 +16,7 @@ const { MOCK, PORT, HOST, DATA_FILE, AUTH } = require("./src/config");
 const { data, saveData, migratedFrom } = require("./src/data");
 const { logHistory } = require("./src/history");
 const { backup, startBackups } = require("./src/backup");
-const { connectionInfo } = require("./src/microinvest");
+const { connectionInfo, startConnectionChecks } = require("./src/microinvest");
 const { createServer } = require("./src/http");
 
 // След преобразуване на данните: копие на стария файл, после запис в новия вид
@@ -28,6 +29,7 @@ if (migratedFrom()) {
 }
 
 startBackups();
+startConnectionChecks();
 
 const server = createServer();
 server.listen(PORT, HOST, () => {

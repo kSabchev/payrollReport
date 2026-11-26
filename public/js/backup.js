@@ -12,9 +12,9 @@ function backupProblemText(b) {
 // Червена лента над обобщението на всички страници, докато има проблем
 function renderAlerts() {
   const b = S.meta.backup;
-  $("#alerts").innerHTML = b?.problem ? `<div class="alert" role="alert"><div><strong>Проблем с резервните копия.</strong>
+  $("#alerts").innerHTML = dbAlertHtml() + (b?.problem ? `<div class="alert" role="alert"><div><strong>Проблем с резервните копия.</strong>
       ${esc(backupProblemText(b))}</div>
-    <div class="actions"><button class="ghost" data-backupnow>Опитай сега</button><button class="ghost" data-tab-go="settings">Настройки</button></div></div>` : "";
+    <div class="actions"><button class="ghost" data-backupnow>Опитай сега</button><button class="ghost" data-tab-go="settings">Настройки</button></div></div>` : "");
 }
 
 // Изскачащ прозорец веднъж на сесия за всеки нов проблем
