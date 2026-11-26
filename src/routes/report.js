@@ -5,7 +5,11 @@ const { data } = require("../data");
 const { readHistory } = require("../history");
 const { backupStatus } = require("../backup");
 const { usersList } = require("../auth");
-const { connectionInfo, source, fromDb, catalog, loadCatalog, columnForGroup, mappedColumns, syncRange } = require("../microinvest");
+const { connectionInfo, dbStatus, checkConnection, source, fromDb, catalog, loadCatalog, columnForGroup, mappedColumns, syncRange } = require("../microinvest");
+const { computeStats } = require("../stats");
+const { exportReport } = require("../export");
+
+const checkPeriod = (from, to) => { if (!isDate(from) || !isDate(to) || from > to) throw new Error("Невалиден период"); };
 const { storeParam, objectIdsOf, storesView, refreshFloat, floatsAll, buildReport } = require("../stores");
 
 module.exports = {
@@ -18,7 +22,7 @@ module.exports = {
       stores: storesView(), objects: catalog.objects, objectsError: catalog.objectsError,
       isAdmin: true, // до приложението стигат само администратори
       auth: { enabled: AUTH, user: user && { name: user.name }, users: AUTH ? usersList() : [] },
-      backup: backupStatus(), floats: floatsAll() };
+      backup: backupStatus(), db: dbStatus(), floats: floatsAll() };
   },
 
   "GET /api/report": async (q, _, user) => {
@@ -27,7 +31,7 @@ module.exports = {
     let syncError = null;
     try { await syncRange(from, to, q.get("force") === "1", user); } catch (e) { syncError = e.message; }
     refreshFloat();
-    return { days: buildReport(from, to, sel), syncError, mappedColumns: mappedColumns(), floats: floatsAll(), backup: backupStatus() };
+    return { days: buildReport(from, to, sel), syncError, mappedColumns: mappedColumns(), floats: floatsAll(), backup: backupStatus(), db: dbStatus() };
   },
 
   // Продажбите от Microinvest за един ден и една колона — за проверка
@@ -52,6 +56,22 @@ module.exports = {
     return { lines: [...byItem.values()].map((r) => ({ ...r, qtty: round2(r.qtty), amount: round2(r.amount), docs: [...r.docs] }))
       .sort((a, b) => b.amount - a.amount) };
   },
+
+  // Статистика за периода (сравнения, графики, най-продавани, магазини)
+  "GET /api/stats": async (q, _, user) => {
+    checkPeriod(q.get("from"), q.get("to"));
+    return { ...(await computeStats(q.get("from"), q.get("to"), q.get("store"), user)), db: dbStatus() };
+  },
+
+  // Отчет за периода като Excel файл
+  "GET /api/export.xlsx": async (q, _, user) => {
+    checkPeriod(q.get("from"), q.get("to"));
+    const { name, buffer } = await exportReport(q.get("from"), q.get("to"), q.get("store"), user);
+    return { file: { name, buffer, type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" } };
+  },
+
+  // Проверка на връзката с базата сега (бутон „Опитай отново“)
+  "POST /api/db-check": async () => ({ db: await checkConnection() }),
 
   "GET /api/history": async (q) => {
     const from = q.get("from"), to = q.get("to"), kind = q.get("kind");

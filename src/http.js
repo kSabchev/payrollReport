@@ -18,6 +18,14 @@ function send(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
+// Файл за изтегляне; името може да е на кирилица (filename*)
+function sendFile(res, { name, type, buffer }) {
+  const ascii = name.replace(/[^ -~]/g, "_").replace(/"/g, "");
+  res.writeHead(200, { "Content-Type": type, "Content-Length": buffer.length, "Cache-Control": "no-store",
+    "Content-Disposition": `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}` });
+  res.end(buffer);
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let b = "";
@@ -61,7 +69,9 @@ function createServer() {
         if (req.method === "POST" && !String(req.headers["content-type"] || "").startsWith("application/json"))
           return send(res, 415, { error: "Очаква се JSON" });
         const body = req.method === "POST" ? await readBody(req) : null;
-        send(res, 200, await h(url.searchParams, body, user, req, res));
+        const result = await h(url.searchParams, body, user, req, res);
+        if (result?.file) return sendFile(res, result.file);
+        send(res, 200, result);
       } catch (e) {
         send(res, 400, { error: e.message });
       }

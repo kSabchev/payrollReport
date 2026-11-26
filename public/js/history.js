@@ -3,7 +3,7 @@
 // ------------------------------------------------------------ История
 // Промени от администраторите и четенията от базата за избрания период
 const HIST_KINDS = [["", "Всички"], ["change", "Промени"], ["sync", "Четене от базата"]];
-const WHAT = { sales: "Продажби по групи", groups: "Групи артикули", objects: "Обекти", detail: "Артикули за ден" };
+const WHAT = { sales: "Продажби по групи", groups: "Групи артикули", objects: "Обекти", detail: "Артикули за ден", top: "Най-продавани артикули" };
 
 function historyFrame() {
   return `<div class="history-bar"><div class="seg" role="group" aria-label="Вид">
@@ -30,7 +30,10 @@ function histRow(e) {
   const time = `${pad(t.getDate())}.${pad(t.getMonth() + 1)}.${t.getFullYear()} ${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}`;
   const user = e.user ? `<span title="${esc(e.user)}">${esc(e.name || e.user)}</span>` : `<span class="muted">—</span>`;
   let what;
-  if (e.kind === "sync") {
+  if (e.kind === "sync" && e.what === "connection") {
+    what = e.restored ? `<span class="tag">база</span>Връзката с базата е възстановена`
+      : `<span class="tag">база</span>Връзката с базата прекъсна<div class="err">${esc(e.error)}</div>`;
+  } else if (e.kind === "sync") {
     const parts = [WHAT[e.what] || e.what];
     if (e.from) parts.push(e.from === e.to ? short(e.from, true) : `${short(e.from)} – ${short(e.to, true)}`);
     if (e.days) parts.push(`${e.days} дни`);

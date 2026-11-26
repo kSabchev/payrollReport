@@ -11,12 +11,14 @@ function render() {
   // запазване на фокуса между прерисуванията
   const focusKey = document.activeElement?.dataset?.key;
 
-  const notice = (S.syncError ? `<div class="notice">${esc(S.syncError)} Показват се запазените данни.</div>` : "") +
+  // При прекъсната връзка червената лента горе вече казва това
+  const notice = (S.syncError && !dbDown() ? `<div class="notice">${esc(S.syncError)} Показват се запазените данни.</div>` : "") +
     (readOnly() && (S.tab === "revenue" || S.tab === "expense") ? `<p class="muted" style="margin:8px 2px 0">Сбор от всички магазини. За да въвеждате, изберете магазин горе вляво.</p>` : "");
   let html = "";
   if (S.tab === "revenue") html = revenueTable();
   else if (S.tab === "expense") html = expenseTable();
   else if (S.tab === "history") { html = historyFrame(); setTimeout(loadHistory); }
+  else if (S.tab === "stats") { html = statsFrame(); setTimeout(loadStats); }
   else html = settingsView();
   $("#view").innerHTML = (S.tab === "revenue" || S.tab === "expense" ? notice : "") + html;
 

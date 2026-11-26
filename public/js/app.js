@@ -20,10 +20,12 @@ async function load(force) {
     const r = await api(`/api/report?from=${p.from}&to=${p.to}&store=${S.store}${force ? "&force=1" : ""}`);
     S.days = r.days; S.syncError = r.syncError; S.meta.mappedColumns = r.mappedColumns; S.meta.floats = r.floats; S.loadedAt = new Date();
     if (r.backup) S.meta.backup = r.backup;
+    if (r.db) S.meta.db = r.db;
   } catch (e) { S.syncError = e.message; S.days = []; }
   S.loading = false;
   render();
   askBackupProblem();
+  askDbProblem();
   askFloatReset();
 }
 
@@ -49,6 +51,9 @@ function updateChrome() {
   $("#who").textContent = u ? u.name : "";
   $("#logout").hidden = !u;
   document.querySelectorAll(".summary [data-sum]").forEach((b) => b.setAttribute("aria-current", b.dataset.sum === S.tab));
+  const tabName = { expense: "Разходи", revenue: "Приходи", stats: "Статистика", history: "История", settings: "Настройки" }[S.tab];
+  $("#printTitle").textContent = `Отчет · ${readOnly() ? "Всички магазини" : storeName(S.store)} · ${p.label} · ${tabName}`;
+  $("#exportBtn").disabled = S.loading;
   $("#syncInfo").textContent = S.loading ? "Зареждане…" : S.loadedAt ? `Обновено ${S.loadedAt.toLocaleTimeString("bg-BG", { hour: "2-digit", minute: "2-digit" })}${S.meta.mock ? " · демо данни" : ""}` : "";
 }
 
@@ -82,6 +87,8 @@ function bindChrome() {
     if (b.dataset.sum === "float") openFloat(); else { S.tab = b.dataset.sum; render(); }
   };
   $("#refresh").onclick = () => load(true);
+  $("#printBtn").onclick = () => window.print();
+  $("#exportBtn").onclick = exportExcel;
   $("#themeBtn").onclick = () => { setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"); };
   $("#storePick").onchange = (e) => { S.store = e.target.value; localStorage.setItem("store", S.store); load(); };
   $("#logout").onclick = async () => { await api("/api/logout", {}).catch(() => {}); location.reload(); };
@@ -91,4 +98,22 @@ function bindChrome() {
     const b = e.target.closest("[data-tab]"); if (!b) return;
     S.tab = S.tab === b.dataset.tab ? "expense" : b.dataset.tab; render();
   };
+}
+
+// ------------------------------------------------------------ Excel
+// Отчетът за показания период и магазин: Обобщение, Приходи, Разходи, Разни
+async function exportExcel() {
+  const p = period(), btn = $("#exportBtn");
+  btn.disabled = true; btn.textContent = "Excel…";
+  try {
+    const r = await fetch(`api/export.xlsx?from=${p.from}&to=${p.to}&store=${S.store}`);
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "Файлът не е създаден");
+    const cd = r.headers.get("content-disposition") || "", fn = /filename\*=UTF-8''([^;]+)/.exec(cd);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(await r.blob());
+    a.download = fn ? decodeURIComponent(fn[1]) : "Отчет.xlsx";
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  } catch (err) { alert(err.message); }
+  btn.disabled = false; btn.textContent = "Excel";
 }
