@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="bg">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Отчет</title>
+<link rel="stylesheet" href="app.css">
+<script src="js/theme.js"></script>
+<script src="js/core.js" defer></script>
+<script src="js/app.js" defer></script>
+<script src="js/tables.js" defer></script>
+<script src="js/dialogs.js" defer></script>
+<script src="js/float.js" defer></script>
+<script src="js/stores.js" defer></script>
+<script src="js/history.js" defer></script>
+<script src="js/auth.js" defer></script>
+<script src="js/backup.js" defer></script>
+<script src="js/settings.js" defer></script>
+<script src="js/main.js" defer></script>
+</head>
+<body>
+<main>
+  <div class="bar">
+    <select class="datepick" id="storePick" aria-label="Магазин" hidden></select>
+    <div class="seg" id="modes" role="group" aria-label="Период">
+      <button data-mode="day">Ден</button><button data-mode="month">Месец</button>
+      <button data-mode="quarter">Тримесечие</button><button data-mode="year">Година</button>
+      <button data-mode="range">Период</button>
+    </div>
+    <div class="nav">
+      <button class="arrow" id="prev" aria-label="Предишен период">‹</button>
+      <div class="period" id="periodLabel"></div>
+      <button class="arrow" id="next" aria-label="Следващ период">›</button>
+    </div>
+    <button class="ghost" id="todayBtn">Днес</button>
+    <input type="date" class="datepick" id="datePick" aria-label="Избор на дата">
+    <span class="range" id="rangePick" hidden>
+      <input type="date" class="datepick" id="fromPick" aria-label="От дата"> –
+      <input type="date" class="datepick" id="toPick" aria-label="До дата">
+    </span>
+    <div class="seg" id="grouping" role="group" aria-label="Редове" hidden>
+      <button data-group="day">По дни</button><button data-group="month">По месеци</button>
+    </div>
+    <span class="topright">
+      <button class="ghost" id="themeBtn" type="button"></button>
+      <span class="pages" role="group" aria-label="Страници">
+        <button class="ghost" data-tab="history">История</button><button class="ghost" data-tab="settings">Настройки</button>
+      </span>
+      <span class="who"><span id="who"></span><button class="link" id="logout" hidden>Изход</button></span>
+    </span>
+  </div>
+
+  <div id="alerts"></div>
+
+  <div class="summary">
+    <button type="button" class="e" data-sum="expense" title="Към Разходи"><span>Разходи</span><strong id="sumExp">—</strong></button>
+    <button type="button" class="r" data-sum="revenue" title="Към Приходи"><span>Приходи</span><strong id="sumRev">—</strong></button>
+    <button type="button" id="floatCell" data-sum="float"><span>Оборотни − разходи</span><strong id="sumFloat">—</strong><small id="floatInfo"></small></button>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" data-tab="expense">Разходи</button>
+    <button role="tab" data-tab="revenue">Приходи</button>
+    <span class="sync" id="syncInfo"></span>
+    <button class="ghost" id="refresh" style="align-self:center;margin-bottom:4px">Обнови от Microinvest</button>
+  </div>
+  <div id="view"></div>
+</main>
+
+<div id="auth" hidden></div>
+
+<dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
+</body>
+</html>
