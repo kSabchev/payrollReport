@@ -1,16 +1,22 @@
 // Резервни копия.
-// Всеки ден в 21:05 (BACKUP_TIME в .env) data.json се копира в backups/data-ГГГГ-ММ-ДД.json.
+// Всеки ден в 21:05 (BACKUP_TIME в .env) данните се записват в backups/data-ГГГГ-ММ-ДД.json.
 // Проверява се всяка минута. Ако програмата не е работила в 21:05, копието за пропуснатия ден се
 // прави веднага при стартиране. Копията не се трият — пазят се завинаги.
+// В копието няма продажбите (cache): те винаги могат да се изтеглят наново от Microinvest.
+// BACKUP_COPY_DIR: всяко копие се записва и във втора папка (друг диск или NAS). Ако тя не е
+// достъпна, опитът се повтаря всяка минута, а липсващите там копия се допълват.
 // backup("причина") прави допълнително копие с час, напр. ръчно или преди промяна на структурата.
 const fs = require("fs");
 const path = require("path");
-const { MOCK, DATA_FILE, BACKUP_DIR, BACKUP_TIME } = require("./config");
+const { MOCK, DATA_FILE, BACKUP_DIR, BACKUP_COPY_DIR, BACKUP_TIME } = require("./config");
 const { pad, fmt } = require("./util");
 const { logHistory } = require("./history");
 
 const BACKUP_LATE_MINUTES = 10; // ако копието за деня липсва толкова след часа, е проблем
+const COPY_DIR = BACKUP_COPY_DIR && path.resolve(BACKUP_COPY_DIR) !== path.resolve(BACKUP_DIR) ? BACKUP_COPY_DIR : null;
+const isBackup = (f) => /^data-\d{4}-\d{2}-\d{2}.*\.json$/.test(f);
 let lastBackup = { at: null, file: null, error: null };
+let copy = { error: null, at: null };
 
 // Последният минал час за копие (днес или вчера) и името на файла за него
 function backupSlot(now = new Date()) {
@@ -20,12 +26,35 @@ function backupSlot(now = new Date()) {
   return { at: slot, file: `data-${fmt(slot)}.json` };
 }
 
+// Записът минава през временен файл, за да не остане половин копие (напр. ако NAS прекъсне)
+function writeFile(dir, name, content) {
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, name), tmp = file + ".tmp";
+  try {
+    fs.writeFileSync(tmp, content);
+    fs.renameSync(tmp, file);
+  } catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
+  const now = new Date();
+  fs.utimesSync(file, now, now);
+}
+
+// Данните без продажбите. Ако data.json не може да се прочете като JSON, се копира както е.
+function backupContent() {
+  const raw = fs.readFileSync(DATA_FILE, "utf8");
+  try {
+    const d = JSON.parse(raw);
+    delete d.cache;
+    return JSON.stringify(d, null, 1);
+  } catch { return raw; }
+}
+
 function writeBackup(name) {
-  const now = new Date(), file = path.join(BACKUP_DIR, name);
-  fs.mkdirSync(BACKUP_DIR, { recursive: true });
-  fs.copyFileSync(DATA_FILE, file);
-  fs.utimesSync(file, now, now); // Windows запазва датата на оригинала; копието трябва да е с часа на копиране
-  lastBackup = { ...lastBackup, at: now.toISOString(), file: name, error: null };
+  const content = backupContent();
+  writeFile(BACKUP_DIR, name, content);
+  lastBackup = { ...lastBackup, at: new Date().toISOString(), file: name, error: null };
+  if (COPY_DIR) {
+    try { writeFile(COPY_DIR, name, content); copyOk(); } catch (e) { copyFailed(e); }
+  }
   return name;
 }
 
@@ -38,8 +67,10 @@ function backup(reason) {
 // Разбираемо съобщение за честите грешки при запис на файл
 function friendlyFsError(e) {
   const hint = { ENOSPC: "няма място на диска", EACCES: "няма права за запис в папката", EPERM: "няма права за запис в папката",
-    EROFS: "дискът е само за четене", EEXIST: "на мястото на папката backups има файл", ENOTDIR: "на мястото на папката backups има файл",
-    ENOENT: "папката или файлът липсва", EBUSY: "файлът е зает от друга програма" }[e.code];
+    EROFS: "дискът е само за четене", EEXIST: "на мястото на папката има файл", ENOTDIR: "на мястото на папката има файл",
+    ENOENT: "папката или файлът липсва", EBUSY: "файлът е зает от друга програма",
+    EHOSTUNREACH: "мрежовото устройство не е достъпно", ENETUNREACH: "мрежовото устройство не е достъпно",
+    EIO: "грешка при четене или запис на устройството", UNKNOWN: "папката не е достъпна" }[e.code];
   return hint ? `${hint} (${e.code})` : e.message;
 }
 
@@ -51,12 +82,39 @@ function backupFailed(err) {
   console.error("Резервно копие:", err.message);
 }
 
+function copyFailed(err) {
+  const message = friendlyFsError(err);
+  if (copy.error !== message) logHistory({ kind: "change", action: "backup-copy-failed", text: `Копието във втората папка (${COPY_DIR}) не е направено: ${message}` });
+  copy = { ...copy, error: message };
+  console.error("Копие във втората папка:", err.message);
+}
+
+function copyOk() {
+  if (copy.error) logHistory({ kind: "change", action: "backup-copy-restored", text: `Копирането във втората папка (${COPY_DIR}) работи отново` });
+  copy = { error: null, at: new Date().toISOString() };
+}
+
+// Копира във втората папка копията, които я няма там (напр. докато NAS е бил изключен)
+function syncCopies() {
+  if (!COPY_DIR || !fs.existsSync(BACKUP_DIR)) return;
+  try {
+    fs.mkdirSync(COPY_DIR, { recursive: true });
+    const there = new Set(fs.readdirSync(COPY_DIR));
+    for (const f of fs.readdirSync(BACKUP_DIR).filter(isBackup)) {
+      if (!there.has(f)) writeFile(COPY_DIR, f, fs.readFileSync(path.join(BACKUP_DIR, f)));
+    }
+    copyOk();
+  } catch (e) { copyFailed(e); }
+}
+
 // Копието за последния минал час, ако още го няма
 function dailyBackup() {
   if (MOCK || !fs.existsSync(DATA_FILE)) return;
   const { file } = backupSlot();
-  if (fs.existsSync(path.join(BACKUP_DIR, file))) return;
-  try { writeBackup(file); } catch (e) { backupFailed(e); }
+  if (!fs.existsSync(path.join(BACKUP_DIR, file))) {
+    try { writeBackup(file); } catch (e) { backupFailed(e); }
+  }
+  if (COPY_DIR && (copy.error || !fs.existsSync(path.join(COPY_DIR, file)))) syncCopies();
 }
 
 // Време на копие: по-късното от датата в името и датата на файла (старите копия на Windows
@@ -68,11 +126,12 @@ function backupTime(f) {
 }
 
 // problem: null | { kind: "error", message } | { kind: "missed", date } (копието за деня липсва след часа)
+//   | { kind: "copy-error", message } (основното копие е наред, втората папка не е достъпна)
 function backupStatus() {
   if (MOCK) return { mock: true };
   let count = 0;
   try {
-    const files = fs.existsSync(BACKUP_DIR) ? fs.readdirSync(BACKUP_DIR).filter((f) => /^data-\d{4}-\d{2}-\d{2}.*\.json$/.test(f)) : [];
+    const files = fs.existsSync(BACKUP_DIR) ? fs.readdirSync(BACKUP_DIR).filter(isBackup) : [];
     count = files.length;
     if (!lastBackup.at) {
       const latest = files.map((f) => ({ f, t: backupTime(f) })).sort((a, b) => b.t - a.t)[0];
@@ -84,12 +143,15 @@ function backupStatus() {
   if (lastBackup.error) problem = { kind: "error", message: lastBackup.error };
   else if (fs.existsSync(DATA_FILE) && Date.now() - slot.at > BACKUP_LATE_MINUTES * 60000 && !fs.existsSync(path.join(BACKUP_DIR, slot.file)))
     problem = { kind: "missed", date: fmt(slot.at) };
-  return { ...lastBackup, problem, dir: BACKUP_DIR, time: BACKUP_TIME, count };
+  else if (copy.error) problem = { kind: "copy-error", message: copy.error };
+  return { ...lastBackup, problem, dir: BACKUP_DIR, time: BACKUP_TIME, count,
+    copy: COPY_DIR ? { dir: COPY_DIR, at: copy.at, error: copy.error } : null };
 }
 
 // Проверка при стартиране и после всяка минута
 function startBackups() {
   dailyBackup();
+  if (COPY_DIR && !copy.error) syncCopies();
   setInterval(dailyBackup, 60 * 1000).unref();
 }
 

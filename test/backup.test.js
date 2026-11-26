@@ -25,14 +25,20 @@ const PASSED = timeFromNow(-2); // часът за копие вече е мин
 let srv, api;
 before(async () => {
   srv = await startServer({
-    env: { BACKUP_TIME: PASSED },
+    env: { BACKUP_TIME: PASSED, BACKUP_COPY_DIR: "nas" }, // относителен път: спрямо папката с данните
     files: {
       "data.json": path.join(ROOT, "data-demo.json"),
       [`backups/data-${daysAgo(400)}.json`]: "{}", // старите копия не се трият
       [`backups/data-${daysAgo(5)}.json`]: "{}",
     },
     // data.json не е променян от 10 дни: копието пак трябва да е с днешна дата
-    prepare: (dir) => { const old = new Date(Date.now() - 10 * 864e5); fs.utimesSync(path.join(dir, "data.json"), old, old); },
+    // с продажби в кеша, които не трябва да влизат в копието
+    prepare: (dir) => {
+      const file = path.join(dir, "data.json"), d = JSON.parse(fs.readFileSync(file, "utf8"));
+      d.cache = { "2026-11-01": { byObject: { 1: { 1: 100 } }, fetchedAt: "2026-11-02T00:00:00Z" } };
+      fs.writeFileSync(file, JSON.stringify(d));
+      const old = new Date(Date.now() - 10 * 864e5); fs.utimesSync(file, old, old);
+    },
   });
   api = srv.request;
   await api("POST", "/api/setup", { username: "admin", password: "secret123" });
@@ -46,9 +52,17 @@ test("часът за копие е минал: при стартиране се
   assert.ok(files.includes(slotFile(PASSED)), files.join(", "));
   assert.ok(files.includes(`data-${daysAgo(5)}.json`));
   assert.ok(files.includes(`data-${daysAgo(400)}.json`));
-  // копието е съдържанието на data.json отпреди стартирането
+  // копието е съдържанието на data.json отпреди стартирането, без продажбите
   const copy = JSON.parse(fs.readFileSync(path.join(srv.dir, "backups", slotFile(PASSED)), "utf8"));
-  assert.deepEqual(copy.expenses, JSON.parse(fs.readFileSync(path.join(ROOT, "data-demo.json"), "utf8")).expenses);
+  const { cache, ...demo } = JSON.parse(fs.readFileSync(path.join(ROOT, "data-demo.json"), "utf8"));
+  assert.equal(copy.cache, undefined);
+  assert.deepEqual(copy, demo);
+});
+
+test("втора папка: старите копия и копието за деня се записват и там", () => {
+  const nas = fs.readdirSync(path.join(srv.dir, "nas")).sort();
+  assert.deepEqual(nas, backups());
+  assert.equal(fs.readFileSync(path.join(srv.dir, "nas", slotFile(PASSED)), "utf8"), fs.readFileSync(path.join(srv.dir, "backups", slotFile(PASSED)), "utf8"));
 });
 
 test("ръчно копие от Настройки", async () => {
@@ -56,6 +70,9 @@ test("ръчно копие от Настройки", async () => {
   assert.equal(r.status, 200);
   assert.match(r.json.backup.file, /-manual\.json$/);
   assert.ok(backups().includes(r.json.backup.file));
+  assert.ok(fs.readdirSync(path.join(srv.dir, "nas")).includes(r.json.backup.file));
+  assert.equal(r.json.backup.copy.dir, path.join(srv.dir, "nas"));
+  assert.equal(r.json.backup.copy.error, null);
   const st = (await api("GET", "/api/state")).json.backup;
   assert.equal(st.file, r.json.backup.file);
   assert.equal(st.time, PASSED);
@@ -111,4 +128,23 @@ test("копие за деня, което вече съществува, не �
   try {
     assert.equal(fs.readFileSync(path.join(s3.dir, "backups", slotFile(PASSED)), "utf8"), "старо");
   } finally { await s3.stop(); }
+});
+
+test("втората папка не е достъпна: основното копие се прави, проблемът се показва и се записва веднъж", async () => {
+  const s4 = await startServer({ env: { BACKUP_TIME: PASSED, BACKUP_COPY_DIR: "nas" },
+    files: { "data.json": path.join(ROOT, "data-demo.json"), nas: "не е папка" } });
+  try {
+    const a = s4.request;
+    await a("POST", "/api/setup", { username: "admin", password: "secret123" });
+    assert.ok(fs.readdirSync(path.join(s4.dir, "backups")).includes(slotFile(PASSED)));
+    const st = (await a("GET", "/api/state")).json.backup;
+    assert.equal(st.problem.kind, "copy-error");
+    assert.ok(st.copy.error);
+    const manual = await a("POST", "/api/backup", {});
+    assert.equal(manual.status, 200); // основното копие е направено
+    assert.equal(manual.json.backup.problem.kind, "copy-error");
+    const h = (await a("GET", `/api/history?from=${daysAgo(1)}&to=${daysAgo(-1)}&kind=change`)).json.entries;
+    assert.equal(h.filter((e) => e.action === "backup-copy-failed").length, 1);
+    assert.equal(h.filter((e) => e.action === "backup-failed").length, 0);
+  } finally { await s4.stop(); }
 });
