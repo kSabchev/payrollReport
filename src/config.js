@@ -18,6 +18,8 @@ module.exports = {
   DATA_FILE: path.join(DATA_DIR, MOCK ? "data-demo.json" : "data.json"),
   HISTORY_DIR: path.join(DATA_DIR, MOCK ? "history-demo" : "history"),
   BACKUP_DIR: path.join(DATA_DIR, "backups"),
+  // Втора папка за копията на друг диск или NAS (BACKUP_COPY_DIR в .env), напр. \\NAS\backup\payroll
+  BACKUP_COPY_DIR: process.env.BACKUP_COPY_DIR ? path.resolve(DATA_DIR, process.env.BACKUP_COPY_DIR) : null,
   // Час за ежедневното копие (BACKUP_TIME=ЧЧ:ММ)
   BACKUP_TIME: /^\d{1,2}:\d{2}$/.test(process.env.BACKUP_TIME || "") ? process.env.BACKUP_TIME : "21:05",
   RECENT_DAYS: 3, // последните N дни винаги се презареждат от базата

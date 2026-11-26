@@ -9,7 +9,11 @@ function accessHelp() {
     const when = b.at ? new Date(b.at).toLocaleString("bg-BG") : null;
     backup = `<p class="help">Всеки ден в ${esc(b.time)} се прави копие на данните в <strong>${esc(b.dir)}</strong>.
       Ако програмата не е работила в този час, копието се прави веднага при следващото стартиране. Копията не се трият
-      (в момента: ${b.count}). ${when ? `Последно копие: ${esc(when)} (${esc(b.file)}).` : "Още няма копие."}</p>
+      (в момента: ${b.count}). ${when ? `Последно копие: ${esc(when)} (${esc(b.file)}).` : "Още няма копие."}
+      В копията няма продажбите — те се изтеглят наново от Microinvest.</p>
+      <p class="help">${b.copy ? `Всяко копие се записва и във втора папка: <strong>${esc(b.copy.dir)}</strong>.
+        ${b.copy.error ? "" : b.copy.at ? `Последно копиране там: ${esc(new Date(b.copy.at).toLocaleString("bg-BG"))}.` : ""}`
+        : `Втора папка за копията (друг диск или NAS) не е настроена. Задава се с BACKUP_COPY_DIR в .env.`}</p>
       ${b.problem ? `<p class="err">${esc(backupProblemText(b))}</p>` : ""}
       <div class="actions" style="justify-content:flex-start;margin-top:0"><button class="ghost" data-backupnow>Направи копие сега</button><span id="backupMsg" class="muted"></span></div>`;
   }

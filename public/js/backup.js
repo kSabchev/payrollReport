@@ -6,6 +6,8 @@ const backupWhen = (b) => (b.at ? new Date(b.at).toLocaleString("bg-BG", { dateS
 function backupProblemText(b) {
   const last = backupWhen(b) ? ` Последно успешно копие: ${backupWhen(b)}.` : " Няма нито едно успешно копие.";
   if (b.problem?.kind === "error") return `Резервното копие на данните не е направено: ${b.problem.message}.${last}`;
+  if (b.problem?.kind === "copy-error") return `Копието във втората папка ${b.copy?.dir || ""} не е направено: ${b.problem.message}. `
+    + `Копието на този диск е наред. Опитът се повтаря всяка минута.`;
   return `Копието за ${b.problem?.date ? short(b.problem.date, true) : "деня"} в ${b.time} не е направено.${last}`;
 }
 
@@ -27,7 +29,7 @@ function askBackupProblem() {
   showDialog(`<h2>Проблем с резервните копия</h2>
     <p>${esc(backupProblemText(b))}</p>
     <p class="muted">Разходите се пазят само в тази програма, затова копието е важно. Проверете дали има място на диска и права за
-      папката <strong>${esc(b.dir)}</strong>. Предупреждението остава горе, докато копието не се направи успешно.</p>
+      папката <strong>${esc(b.problem.kind === "copy-error" ? b.copy?.dir : b.dir)}</strong>${b.problem.kind === "copy-error" ? " и дали устройството е включено и в мрежата" : ""}. Предупреждението остава горе, докато копието не се направи успешно.</p>
     <div class="actions"><button class="ghost" id="cancel">Затвори</button><button class="primary" data-backupnow>Опитай сега</button></div>`,
     (root) => { $("#cancel", root).onclick = closeDialog; });
 }
@@ -39,8 +41,9 @@ async function backupNow() {
     S.meta.backup = r.backup;
     if (dlg.open) closeDialog();
     render();
-    if ($("#backupMsg")) { $("#backupMsg").textContent = "Копието е направено."; $("#backupMsg").className = "muted"; }
-    else alert("Копието е направено.");
+    const text = r.backup.problem ? "Копието е направено, но: " + backupProblemText(r.backup) : "Копието е направено.";
+    if ($("#backupMsg")) { $("#backupMsg").textContent = text; $("#backupMsg").className = r.backup.problem ? "err" : "muted"; }
+    else alert(text);
   } catch (err) {
     if (dlg.open) closeDialog();
     await refreshMeta().catch(() => {});
