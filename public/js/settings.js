@@ -12,7 +12,9 @@ function accessHelp() {
       (в момента: ${b.count}). ${when ? `Последно копие: ${esc(when)} (${esc(b.file)}).` : "Още няма копие."}
       В копията няма продажбите — те се изтеглят наново от Microinvest.</p>
       <p class="help">${b.copy ? `Всяко копие се записва и във втора папка: <strong>${esc(b.copy.dir)}</strong>.
-        ${b.copy.error ? "" : b.copy.at ? `Последно копиране там: ${esc(new Date(b.copy.at).toLocaleString("bg-BG"))}.` : ""}`
+        ${b.copy.error ? "" : b.copy.at ? `Последно копиране там: ${esc(new Date(b.copy.at).toLocaleString("bg-BG"))}.` : ""}
+        <span class="muted">Програмата работи като Windows потребител „${esc(b.copy.runAs)}“${b.copy.login
+          ? `; с мрежовата папка се свързва като „${esc(b.copy.login)}“` : ""}.</span>`
         : `Втора папка за копията (друг диск или NAS) не е настроена. Задава се с BACKUP_COPY_DIR в .env.`}</p>
       ${b.problem ? `<p class="err">${esc(backupProblemText(b))}</p>` : ""}
       <div class="actions" style="justify-content:flex-start;margin-top:0"><button class="ghost" data-backupnow>Направи копие сега</button><span id="backupMsg" class="muted"></span></div>`;

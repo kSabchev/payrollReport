@@ -20,6 +20,9 @@ module.exports = {
   BACKUP_DIR: path.join(DATA_DIR, "backups"),
   // Втора папка за копията на друг диск или NAS (BACKUP_COPY_DIR в .env), напр. \\NAS\backup\payroll
   BACKUP_COPY_DIR: process.env.BACKUP_COPY_DIR ? path.resolve(DATA_DIR, process.env.BACKUP_COPY_DIR) : null,
+  // Потребител и парола за мрежовата папка (NAS), ако услугата няма достъп до нея сама
+  BACKUP_COPY_USER: process.env.BACKUP_COPY_USER || "",
+  BACKUP_COPY_PASSWORD: process.env.BACKUP_COPY_PASSWORD || "",
   // Час за ежедневното копие (BACKUP_TIME=ЧЧ:ММ)
   BACKUP_TIME: /^\d{1,2}:\d{2}$/.test(process.env.BACKUP_TIME || "") ? process.env.BACKUP_TIME : "21:05",
   RECENT_DAYS: 3, // последните N дни винаги се презареждат от базата
