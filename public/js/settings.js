@@ -51,6 +51,8 @@ function settingsView() {
     <div class="row"><span class="muted" style="width:80px">Приходи</span><div class="collist">${revCols().map((c) => `<button data-colmenu="revenue|${c.id}">${esc(c.name)}</button>`).join("")}<button data-addcol="revenue">+ Колона</button></div></div>
     <div class="row"><span class="muted" style="width:80px">Разходи</span><div class="collist">${expCols().map((c) => `<button data-colmenu="expense|${c.id}">${esc(c.name)}</button>`).join("")}<button data-addcol="expense">+ Колона</button></div></div>
 
+    ${importSettings()}
+
     <h3>Данни от Microinvest</h3>
     <p class="help">Продажбите се пазят локално след първото зареждане, а последните 3 дни се четат наново всеки път. Ако сте коригирали стари документи в Microinvest, изтеглете всичко наново.</p>
     <button class="ghost" id="clearCache">Изтегли всичко наново</button>

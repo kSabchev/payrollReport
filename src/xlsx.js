@@ -112,4 +112,4 @@ function zip(files) {
   return Buffer.concat([...local, centralBuf, end]);
 }
 
-module.exports = { workbook, crc32 };
+module.exports = { workbook, zip, crc32 };

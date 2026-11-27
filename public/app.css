@@ -276,3 +276,10 @@ svg.chart .future .seg { opacity: .35; }
   .dlg { padding: 14px; }
   .row .amount { flex-basis: 96px; }
 }
+
+/* Импорт от Excel */
+.imptable td:last-child { text-align: left; }
+.imptable select { width: 100%; border: 1px solid var(--line); background: var(--input); color: var(--ink); border-radius: 6px; padding: 4px 6px; }
+.filepick { cursor: pointer; }
+.filepick input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.filepick:focus-within { outline: 2px solid var(--accent); }
