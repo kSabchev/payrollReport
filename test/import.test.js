@@ -46,16 +46,16 @@ async function expensesOf(from, to, store = "s1") {
 }
 
 test("преглед: месеци, дни, суми, предложени колони; приходите и редът „Sum“ не се внасят", async () => {
-  const r = await api("POST", "/api/import/preview", { store: "s1", file: FILE, fileName: "Разходи2025.xlsx" });
+  const r = await api("POST", "/api/import/preview", { store: "s1", file: FILE, fileName: "Разходи2026.xlsx" });
   assert.equal(r.status, 200, r.text);
   const p = r.json;
-  assert.equal(p.year, 2025); // от името на файла
+  assert.equal(p.year, 2026); // от името на файла
   assert.deepEqual(p.months.map((x) => [x.sheet, x.days, x.total]), [["Януари", 2, 8866.5], ["Февруари", 2, 938]]);
   assert.deepEqual(p.skipped, ["Декември (няма разходи)"]);
   assert.deepEqual(p.errors, []);
   assert.equal(p.warningCount, 0);
-  assert.equal(p.from, "2025-01-05");
-  assert.equal(p.to, "2025-02-28");
+  assert.equal(p.from, "2026-01-05");
+  assert.equal(p.to, "2026-02-28");
   assert.equal(p.days, 4);
   const sug = Object.fromEntries(p.columns.map((c) => [c.name, c.suggest]));
   assert.deepEqual(sug, { Разни: "misc", Сервиз: "service", Стока: "goods", "А/Д": "", Сметки: "bills", Гориво: "fuel", Онлине: "eshop", Телефони: "phones" });
@@ -65,19 +65,19 @@ test("преглед: месеци, дни, суми, предложени ко�
 
 test("запис: без избрана колона за „А/Д“ се отказва; после се записва с копие и история", async () => {
   const { "А/Д": _, ...partial } = MAP;
-  const bad = await api("POST", "/api/import/apply", { store: "s1", file: FILE, fileName: "Разходи2025.xlsx", mapping: partial });
+  const bad = await api("POST", "/api/import/apply", { store: "s1", file: FILE, fileName: "Разходи2026.xlsx", mapping: partial });
   assert.equal(bad.status, 400);
   assert.match(bad.json.error, /А\/Д/);
 
-  const r = await api("POST", "/api/import/apply", { store: "s1", file: FILE, fileName: "Разходи2025.xlsx", mapping: MAP });
+  const r = await api("POST", "/api/import/apply", { store: "s1", file: FILE, fileName: "Разходи2026.xlsx", mapping: MAP });
   assert.equal(r.status, 200, r.text);
   assert.equal(r.json.imported, 4);
   assert.equal(r.json.total, 9804.5);
-  const e = await expensesOf("2025-01-01", "2025-02-28");
-  assert.deepEqual(e["2025-01-05"], { service: 270, goods: 305, salaries: 8000 });
-  assert.deepEqual(e["2025-01-08"].misc, [{ name: "от Excel", value: 44 }]);
-  assert.equal(e["2025-02-28"].fuel, 58);
-  assert.deepEqual(await expensesOf("2025-01-01", "2025-02-28", "s2"), {}); // другият магазин не е пипнат
+  const e = await expensesOf("2026-01-01", "2026-02-28");
+  assert.deepEqual(e["2026-01-05"], { service: 270, goods: 305, salaries: 8000 });
+  assert.deepEqual(e["2026-01-08"].misc, [{ name: "от Excel", value: 44 }]);
+  assert.equal(e["2026-02-28"].fuel, 58);
+  assert.deepEqual(await expensesOf("2026-01-01", "2026-02-28", "s2"), {}); // другият магазин не е пипнат
 
   assert.ok(fs.readdirSync(path.join(srv.dir, "backups")).some((f) => f.endsWith("-before-import.json")));
   const h = (await api("GET", "/api/history?from=2000-01-01&to=2100-01-01&kind=change")).json.entries;
@@ -85,44 +85,68 @@ test("запис: без избрана колона за „А/Д“ се от�
 });
 
 test("дни с въведени разходи: пропускат се, освен ако не е избрано „замени“; другите колони остават", async () => {
-  await api("POST", "/api/expense", { store: "s1", date: "2025-02-02", col: "eshop", value: 77 });
-  const p = (await api("POST", "/api/import/preview", { store: "s1", file: FILE, year: 2025 })).json;
+  await api("POST", "/api/expense", { store: "s1", date: "2026-02-02", col: "eshop", value: 77 });
+  const p = (await api("POST", "/api/import/preview", { store: "s1", file: FILE, year: 2026 })).json;
   assert.equal(p.existing.length, 4);
 
-  const skip = (await api("POST", "/api/import/apply", { store: "s1", file: FILE, year: 2025, mapping: { ...MAP, Сервиз: "goods" } })).json;
+  const skip = (await api("POST", "/api/import/apply", { store: "s1", file: FILE, year: 2026, mapping: { ...MAP, Сервиз: "goods" } })).json;
   assert.equal(skip.imported, 0);
   assert.equal(skip.skipped, 4);
-  assert.equal((await expensesOf("2025-02-02", "2025-02-02"))["2025-02-02"].service, 130);
+  assert.equal((await expensesOf("2026-02-02", "2026-02-02"))["2026-02-02"].service, 130);
 
-  const over = (await api("POST", "/api/import/apply", { store: "s1", file: FILE, year: 2025, overwrite: true, mapping: { ...MAP, Сервиз: "", Сметки: "new" } })).json;
+  const over = (await api("POST", "/api/import/apply", { store: "s1", file: FILE, year: 2026, overwrite: true, mapping: { ...MAP, Сервиз: "", Сметки: "new" } })).json;
   assert.equal(over.imported, 4);
   assert.deepEqual(over.created, ["Сметки"]);
   const newCol = over.expenseColumns.find((c) => c.name === "Сметки" && c.id !== "bills");
-  const d = (await expensesOf("2025-02-02", "2025-02-02"))["2025-02-02"];
+  const d = (await expensesOf("2026-02-02", "2026-02-02"))["2026-02-02"];
   assert.equal(d.eshop, 77);    // не е от файла — остава
   assert.equal(d.service, 130); // „Сервиз“ не се внася този път — старата стойност остава
   assert.equal(d[newCol.id], 610);
 });
 
+test("лева -> евро: за година преди 2026 сумите се делят на 1,95583, освен ако не е изключено", async () => {
+  const file = b64([sheet("Март", { 3: { Сервиз: 195.58, Стока: 100 }, 4: { Разни: 1000 } })]);
+  const p = (await api("POST", "/api/import/preview", { store: "s2", file, fileName: "Отчет2024.xlsx" })).json;
+  assert.equal(p.year, 2024);
+  assert.equal(p.bgn, true);
+  assert.equal(p.rate, 1.95583);
+  assert.deepEqual(p.months.map((x) => x.total), [662.42]); // 1295,58 лв.
+  assert.equal(p.columns.find((c) => c.name === "Сервиз").total, 100);
+  assert.equal(p.columns.find((c) => c.name === "Стока").total, 51.13);
+
+  const off = (await api("POST", "/api/import/preview", { store: "s2", file, year: 2024, bgn: false })).json;
+  assert.equal(off.bgn, false);
+  assert.equal(off.columns.find((c) => c.name === "Сервиз").total, 195.58);
+  assert.equal((await api("POST", "/api/import/preview", { store: "s2", file, year: 2026 })).json.bgn, false);
+
+  const r = (await api("POST", "/api/import/apply", { store: "s2", file, year: 2024, mapping: MAP })).json;
+  assert.equal(r.bgn, true);
+  const e = await expensesOf("2024-03-01", "2024-03-31", "s2");
+  assert.deepEqual(e["2024-03-03"], { service: 100, goods: 51.13 });
+  assert.deepEqual(e["2024-03-04"].misc, [{ name: "от Excel", value: 511.29 }]);
+  const h = (await api("GET", "/api/history?from=2000-01-01&to=2100-01-01&kind=change")).json.entries;
+  assert.ok(h.some((x) => x.action === "import" && /от лева по курс 1,95583/.test(x.text)));
+});
+
 test("грешки: несъществуващ ден със суми, повреден файл, „Всички магазини“, сбор, който не съвпада", async () => {
   const feb = b64([sheet("Февруари", { 30: { Сервиз: 10 } })]);
-  const p = (await api("POST", "/api/import/preview", { store: "s1", file: feb, year: 2025 })).json;
+  const p = (await api("POST", "/api/import/preview", { store: "s1", file: feb, year: 2026 })).json;
   assert.match(p.errors[0], /няма 30-во число/);
-  const a = await api("POST", "/api/import/apply", { store: "s1", file: feb, year: 2025, mapping: MAP });
+  const a = await api("POST", "/api/import/apply", { store: "s1", file: feb, year: 2026, mapping: MAP });
   assert.equal(a.status, 400);
   assert.match(a.json.error, /грешки/);
 
-  const broken = await api("POST", "/api/import/preview", { store: "s1", file: Buffer.from("not a zip").toString("base64"), year: 2025 });
+  const broken = await api("POST", "/api/import/preview", { store: "s1", file: Buffer.from("not a zip").toString("base64"), year: 2026 });
   assert.equal(broken.status, 400);
   assert.match(broken.json.error, /не може да се прочете/);
 
-  const all = await api("POST", "/api/import/preview", { store: "all", file: FILE, year: 2025 });
+  const all = await api("POST", "/api/import/preview", { store: "all", file: FILE, year: 2026 });
   assert.equal(all.status, 400);
 
   // сборът не съвпада с „Разход Магазин (общо)“ — предупреждение, не грешка
   const off = sheet("Март", { 3: { Стока: 50 } });
   off.rows[3][9] = 60;
-  const w = (await api("POST", "/api/import/preview", { store: "s1", file: b64([off]), year: 2025 })).json;
+  const w = (await api("POST", "/api/import/preview", { store: "s1", file: b64([off]), year: 2026 })).json;
   assert.equal(w.errors.length, 0);
   assert.match(w.warnings[0], /не е равен/);
 });
@@ -137,14 +161,14 @@ test("четене на файл от Excel: общи текстове (sharedSt
     "xl/sharedStrings.xml": `<sst ${ns}><si><t>Дата</t></si><si><r><t>Сер</t></r><r><t>виз</t></r></si><si><t>Стока &amp; др.</t></si></sst>`,
     "xl/worksheets/sheet1.xml": `<worksheet ${ns}><sheetData>
       <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c></row>
-      <row r="2"><c r="A2" s="3"><v>45663</v></c><c r="B2"><f>10+5</f><v>15</v></c><c r="C2"><v>2.5</v></c></row>
-      <row r="3"><c r="A3" t="inlineStr"><is><t>07.01.2025</t></is></c><c r="B3"/><c r="C3"><v>4</v></c></row>
+      <row r="2"><c r="A2" s="3"><v>46028</v></c><c r="B2"><f>10+5</f><v>15</v></c><c r="C2"><v>2.5</v></c></row>
+      <row r="3"><c r="A3" t="inlineStr"><is><t>07.01.2026</t></is></c><c r="B3"/><c r="C3"><v>4</v></c></row>
     </sheetData></worksheet>`,
   };
   const r = parseExpenses(zip(files), 2030);
   assert.deepEqual(r.headers, ["Сервиз", "Стока & др."]);
   assert.deepEqual(r.days, [
-    { date: "2025-01-06", values: { Сервиз: 15, "Стока & др.": 2.5 } },
-    { date: "2025-01-07", values: { "Стока & др.": 4 } },
+    { date: "2026-01-06", values: { Сервиз: 15, "Стока & др.": 2.5 } },
+    { date: "2026-01-07", values: { "Стока & др.": 4 } },
   ]);
 });

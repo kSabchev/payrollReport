@@ -26,6 +26,11 @@ function yearOf(b) {
   return y;
 }
 
+// Лев -> евро: официалният фиксиран курс. Еврото е в България от 01.01.2026, затова за по-стари
+// години сумите по подразбиране се смятат за левове.
+const BGN_PER_EUR = 1.95583;
+const EURO_FROM_YEAR = 2026;
+
 function load(b) {
   if (typeof b.file !== "string" || !b.file) throw new Error("Изберете Excel файл");
   const buf = Buffer.from(b.file, "base64");
@@ -33,14 +38,20 @@ function load(b) {
   let parsed;
   try { parsed = parseExpenses(buf, year); }
   catch (e) { throw new Error("Файлът не може да се прочете: " + e.message); }
-  return { year, parsed };
+  // bgn: true/false от прозореца; без стойност — според годината
+  const bgn = typeof b.bgn === "boolean" ? b.bgn : year < EURO_FROM_YEAR;
+  if (bgn) {
+    for (const d of parsed.days) for (const h in d.values) d.values[h] = round2(d.values[h] / BGN_PER_EUR);
+    for (const m of parsed.months) m.total = round2(m.total / BGN_PER_EUR);
+  }
+  return { year, parsed, bgn };
 }
 
 const dayTotal = (values) => Object.values(values).reduce((a, b) => a + b, 0);
 
 function preview(b) {
   const st = storeParam(b.store), { expenses } = sd(st);
-  const { year, parsed } = load(b);
+  const { year, parsed, bgn } = load(b);
   const cols = parsed.headers.map((name) => {
     const vals = parsed.days.map((d) => d.values[name]).filter((v) => v != null);
     return { name, total: round2(vals.reduce((a, v) => a + v, 0)), count: vals.length, suggest: suggest(name) };
@@ -48,7 +59,7 @@ function preview(b) {
   const existing = parsed.days.filter((d) => expenses[d.date]).map((d) => d.date);
   const today = fmt(new Date());
   return {
-    store: st.id, year, months: parsed.months, skipped: parsed.skipped, warnings: parsed.warnings.slice(0, 50),
+    store: st.id, year, bgn, rate: BGN_PER_EUR, months: parsed.months, skipped: parsed.skipped, warnings: parsed.warnings.slice(0, 50),
     warningCount: parsed.warnings.length, errors: parsed.errors, columns: cols,
     from: parsed.days[0]?.date ?? null, to: parsed.days.at(-1)?.date ?? null, days: parsed.days.length,
     total: round2(parsed.days.reduce((a, d) => a + dayTotal(d.values), 0)),
@@ -59,7 +70,7 @@ function preview(b) {
 // mapping: { заглавие: id на колона | "new" (нова колона със същото име) | "" (не се внася) }
 function apply(b, user) {
   const st = storeParam(b.store), { expenses } = sd(st);
-  const { year, parsed } = load(b);
+  const { year, parsed, bgn } = load(b);
   if (parsed.errors.length) throw new Error("Файлът има грешки: " + parsed.errors[0]);
   if (!parsed.days.length) throw new Error("Във файла няма разходи за внасяне");
   const mapping = b.mapping || {};
@@ -104,11 +115,12 @@ function apply(b, user) {
   recomputeFloat(st);
   saveData();
   const range = imported ? `${dmy(changed[0].date)} – ${dmy(changed.at(-1).date)}` : "";
-  audit(user, "import", `${storeLabel(st)}Импорт на разходи от Excel${b.fileName ? ` (${b.fileName})` : ""}: ${imported} дни${range ? `, ${range}` : ""}, общо ${showVal(round2(total))}`
+  audit(user, "import", `${storeLabel(st)}Импорт на разходи от Excel${b.fileName ? ` (${b.fileName})` : ""}: ${imported} дни${range ? `, ${range}` : ""}, общо ${showVal(round2(total))} €`
+    + (bgn ? ` (от лева по курс ${String(BGN_PER_EUR).replace(".", ",")})` : "")
     + (skippedDays ? `; пропуснати ${skippedDays} дни с въведени разходи` : "")
     + (created.length ? `; нови колони: ${created.join(", ")}` : ""),
-  { store: st.id, year, file: b.fileName || null, backup: file, mapping, overwrite: !!b.overwrite, days: changed });
-  return { ok: true, imported, skipped: skippedDays, total: round2(total), created, backup: file || null, floats: floatsAll(),
+  { store: st.id, year, bgn, file: b.fileName || null, backup: file, mapping, overwrite: !!b.overwrite, days: changed });
+  return { ok: true, imported, skipped: skippedDays, total: round2(total), bgn, created, backup: file || null, floats: floatsAll(),
     expenseColumns: data.expenseColumns, from: changed[0]?.date ?? null, to: changed.at(-1)?.date ?? null };
 }
 
