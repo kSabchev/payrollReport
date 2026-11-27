@@ -5,10 +5,14 @@
 // В копието няма продажбите (cache): те винаги могат да се изтеглят наново от Microinvest.
 // BACKUP_COPY_DIR: всяко копие се записва и във втора папка (друг диск или NAS). Ако тя не е
 // достъпна, опитът се повтаря всяка минута, а липсващите там копия се допълват.
+// BACKUP_COPY_USER/BACKUP_COPY_PASSWORD: за мрежова папка програмата се свързва с „net use“ с този
+// потребител. Нужно е, защото услугата работи като SYSTEM и не вижда паролите, запазени в Explorer.
 // backup("причина") прави допълнително копие с час, напр. ръчно или преди промяна на структурата.
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
-const { MOCK, DATA_FILE, BACKUP_DIR, BACKUP_COPY_DIR, BACKUP_TIME } = require("./config");
+const { execFileSync } = require("child_process");
+const { MOCK, DATA_FILE, BACKUP_DIR, BACKUP_COPY_DIR, BACKUP_COPY_USER, BACKUP_COPY_PASSWORD, BACKUP_TIME } = require("./config");
 const { pad, fmt } = require("./util");
 const { logHistory } = require("./history");
 
@@ -17,6 +21,44 @@ const COPY_DIR = BACKUP_COPY_DIR && path.resolve(BACKUP_COPY_DIR) !== path.resol
 const isBackup = (f) => /^data-\d{4}-\d{2}-\d{2}.*\.json$/.test(f);
 let lastBackup = { at: null, file: null, error: null };
 let copy = { error: null, at: null };
+
+// ------------------------------------------------------------ Мрежова папка (NAS)
+const SHARE = COPY_DIR && /^\\\\[^\\]+\\[^\\]+/.exec(COPY_DIR)?.[0]; // \\сървър\папка
+const runAs = () => { try { return os.userInfo().username; } catch { return ""; } };
+let share = { tried: false, error: null };
+
+// Грешките на „net use“ по номер (текстът му е на езика на Windows и често с грешна кодировка)
+const NET_ERRORS = {
+  53: "мрежовият път не е намерен — проверете името на компютъра (NAS)",
+  67: "споделената папка не е намерена — проверете пътя",
+  86: "грешна парола за NAS",
+  1326: "грешно име или парола за NAS",
+  1327: "потребителят на NAS има ограничение за вход",
+  1330: "паролата за NAS е изтекла",
+  1331: "потребителят на NAS е изключен",
+  1909: "потребителят на NAS е заключен след много грешни опити",
+  1219: null, // вече има връзка с тази папка — не е грешка
+};
+
+// Свързва се с мрежовата папка с потребителя от .env. Само веднъж (и при ръчно копие): при грешна
+// парола опит на всяка минута би заключил потребителя на NAS.
+function connectShare(force = false) {
+  if (!SHARE || !BACKUP_COPY_USER || process.platform !== "win32") return;
+  if (share.tried && !force) return;
+  share.tried = true;
+  try {
+    execFileSync("net", ["use", SHARE, BACKUP_COPY_PASSWORD, `/user:${BACKUP_COPY_USER}`, "/persistent:no"],
+      { windowsHide: true, timeout: 20000, stdio: ["ignore", "pipe", "pipe"] });
+    share.error = null;
+  } catch (e) {
+    // Без e.message: в него е командата заедно с паролата
+    const out = `${e.stdout || ""} ${e.stderr || ""}`;
+    const code = Number(/\b(\d{2,4})\b/.exec(out)?.[1]);
+    if (code in NET_ERRORS && NET_ERRORS[code] === null) { share.error = null; return; }
+    share.error = NET_ERRORS[code] || (e.code === "ETIMEDOUT" ? "NAS не отговаря" : `net use завърши с грешка${code ? ` ${code}` : ""}`);
+    console.error("Връзка с мрежовата папка:", share.error);
+  }
+}
 
 // Последният минал час за копие (днес или вчера) и името на файла за него
 function backupSlot(now = new Date()) {
@@ -53,6 +95,7 @@ function writeBackup(name) {
   writeFile(BACKUP_DIR, name, content);
   lastBackup = { ...lastBackup, at: new Date().toISOString(), file: name, error: null };
   if (COPY_DIR) {
+    connectShare();
     try { writeFile(COPY_DIR, name, content); copyOk(); } catch (e) { copyFailed(e); }
   }
   return name;
@@ -60,6 +103,7 @@ function writeBackup(name) {
 
 function backup(reason) {
   if (MOCK || !fs.existsSync(DATA_FILE)) return null;
+  if (reason === "manual" && copy.error) connectShare(true); // ръчното копие опитва връзката с NAS отново
   const now = new Date();
   return writeBackup(`data-${fmt(now)}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${reason}.json`);
 }
@@ -82,8 +126,20 @@ function backupFailed(err) {
   console.error("Резервно копие:", err.message);
 }
 
+// Защо мрежовата папка не е достъпна: грешката от „net use“ или подсказка за потребителя на услугата
+function copyMessage(err) {
+  if (share.error) return `не може да се свърже с ${SHARE}: ${share.error}`;
+  const msg = friendlyFsError(err);
+  if (SHARE && ["UNKNOWN", "EPERM", "EACCES", "ENOENT"].includes(err.code) && !BACKUP_COPY_USER) {
+    return `${msg}. Програмата работи като Windows потребител „${runAs()}“, който няма достъп до мрежовата папка `
+      + `(Explorer ползва вашия потребител и запазената парола). Задайте BACKUP_COPY_USER и BACKUP_COPY_PASSWORD в .env `
+      + `с потребител на NAS и рестартирайте услугата`;
+  }
+  return msg;
+}
+
 function copyFailed(err) {
-  const message = friendlyFsError(err);
+  const message = copyMessage(err);
   if (copy.error !== message) logHistory({ kind: "change", action: "backup-copy-failed", text: `Копието във втората папка (${COPY_DIR}) не е направено: ${message}` });
   copy = { ...copy, error: message };
   console.error("Копие във втората папка:", err.message);
@@ -97,6 +153,7 @@ function copyOk() {
 // Копира във втората папка копията, които я няма там (напр. докато NAS е бил изключен)
 function syncCopies() {
   if (!COPY_DIR || !fs.existsSync(BACKUP_DIR)) return;
+  connectShare();
   try {
     fs.mkdirSync(COPY_DIR, { recursive: true });
     const there = new Set(fs.readdirSync(COPY_DIR));
@@ -145,7 +202,7 @@ function backupStatus() {
     problem = { kind: "missed", date: fmt(slot.at) };
   else if (copy.error) problem = { kind: "copy-error", message: copy.error };
   return { ...lastBackup, problem, dir: BACKUP_DIR, time: BACKUP_TIME, count,
-    copy: COPY_DIR ? { dir: COPY_DIR, at: copy.at, error: copy.error } : null };
+    copy: COPY_DIR ? { dir: COPY_DIR, at: copy.at, error: copy.error, runAs: runAs(), login: BACKUP_COPY_USER || null } : null };
 }
 
 // Проверка при стартиране и после всяка минута

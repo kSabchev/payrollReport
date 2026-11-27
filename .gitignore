@@ -7,3 +7,6 @@ data.json
 data.json.tmp
 history/
 history-demo/
+# Excel файлове за импорт и временните файлове на Excel
+/*.xlsx
+~$*

@@ -26,11 +26,22 @@ function sendFile(res, { name, type, buffer }) {
   res.end(buffer);
 }
 
+const MAX_BODY = 20 * 1024 * 1024; // Excel файлът за импорт идва в заявката
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let b = "";
-    req.on("data", (c) => (b += c));
-    req.on("end", () => { try { resolve(b ? JSON.parse(b) : {}); } catch (e) { reject(e); } });
+    const parts = [];
+    let size = 0;
+    req.on("data", (c) => {
+      size += c.length;
+      if (size > MAX_BODY) { reject(new Error("Файлът е твърде голям")); req.destroy(); return; }
+      parts.push(c);
+    });
+    req.on("end", () => {
+      const b = Buffer.concat(parts).toString("utf8");
+      try { resolve(b ? JSON.parse(b) : {}); } catch (e) { reject(e); }
+    });
+    req.on("error", reject);
   });
 }
 

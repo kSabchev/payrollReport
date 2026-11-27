@@ -5,6 +5,7 @@ const { data, saveData, emptyStore } = require("../data");
 const { audit } = require("../history");
 const { backup, backupFailed, backupStatus, friendlyFsError } = require("../backup");
 const { catalog } = require("../microinvest");
+const importer = require("../import");
 const { sd, storeParam, storesView, ensureFloat, recomputeFloat, floatsAll } = require("../stores");
 
 const tableName = (t) => (t === "revenue" ? "Приходи" : "Разходи");
@@ -156,4 +157,8 @@ module.exports = {
     audit(user, "backup", `Ръчно резервно копие: ${file}`);
     return { ok: true, backup: backupStatus() };
   },
+
+  // Импорт на разходи от Excel: първо преглед (нищо не се записва), после запис
+  "POST /api/import/preview": async (_, b) => importer.preview(b),
+  "POST /api/import/apply": async (_, b, user) => importer.apply(b, user),
 };

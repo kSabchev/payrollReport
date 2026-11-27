@@ -12,7 +12,9 @@ function accessHelp() {
       (в момента: ${b.count}). ${when ? `Последно копие: ${esc(when)} (${esc(b.file)}).` : "Още няма копие."}
       В копията няма продажбите — те се изтеглят наново от Microinvest.</p>
       <p class="help">${b.copy ? `Всяко копие се записва и във втора папка: <strong>${esc(b.copy.dir)}</strong>.
-        ${b.copy.error ? "" : b.copy.at ? `Последно копиране там: ${esc(new Date(b.copy.at).toLocaleString("bg-BG"))}.` : ""}`
+        ${b.copy.error ? "" : b.copy.at ? `Последно копиране там: ${esc(new Date(b.copy.at).toLocaleString("bg-BG"))}.` : ""}
+        <span class="muted">Програмата работи като Windows потребител „${esc(b.copy.runAs)}“${b.copy.login
+          ? `; с мрежовата папка се свързва като „${esc(b.copy.login)}“` : ""}.</span>`
         : `Втора папка за копията (друг диск или NAS) не е настроена. Задава се с BACKUP_COPY_DIR в .env.`}</p>
       ${b.problem ? `<p class="err">${esc(backupProblemText(b))}</p>` : ""}
       <div class="actions" style="justify-content:flex-start;margin-top:0"><button class="ghost" data-backupnow>Направи копие сега</button><span id="backupMsg" class="muted"></span></div>`;
@@ -50,6 +52,8 @@ function settingsView() {
       Промените важат за всички магазини.</p>
     <div class="row"><span class="muted" style="width:80px">Приходи</span><div class="collist">${revCols().map((c) => `<button data-colmenu="revenue|${c.id}">${esc(c.name)}</button>`).join("")}<button data-addcol="revenue">+ Колона</button></div></div>
     <div class="row"><span class="muted" style="width:80px">Разходи</span><div class="collist">${expCols().map((c) => `<button data-colmenu="expense|${c.id}">${esc(c.name)}</button>`).join("")}<button data-addcol="expense">+ Колона</button></div></div>
+
+    ${importSettings()}
 
     <h3>Данни от Microinvest</h3>
     <p class="help">Продажбите се пазят локално след първото зареждане, а последните 3 дни се четат наново всеки път. Ако сте коригирали стари документи в Microinvest, изтеглете всичко наново.</p>
